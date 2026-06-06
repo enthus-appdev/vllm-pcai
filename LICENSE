@@ -1,0 +1,8 @@
+Apache License 2.0
+
+Copyright (c) 2026 enthus
+
+This repository's own files (Dockerfile, README) are licensed under Apache-2.0.
+The chat templates are provided by the vLLM project (vllm-project/vllm,
+Apache-2.0) and are consumed via the `vllm` git submodule — they retain their
+upstream license and copyright. See https://github.com/vllm-project/vllm.

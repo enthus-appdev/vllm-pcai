@@ -1,0 +1,5 @@
+# The vLLM submodule is the whole repo, but the image only needs its
+# example chat templates. Keep the build context small.
+vllm/**
+!vllm/examples/*.jinja
+.git
