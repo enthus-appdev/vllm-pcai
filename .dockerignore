@@ -1,5 +1,5 @@
-# The vLLM submodule is the whole repo, but the image only needs its
-# example chat templates. Keep the build context small.
-vllm/**
-!vllm/examples/*.jinja
+# Only the enhanced .jinja templates are needed from the fix submodule;
+# keep the rest (docs, lockfiles, benchmarks) out of the build context.
+chat-template-fix/**
+!chat-template-fix/chat-template/*.jinja
 .git

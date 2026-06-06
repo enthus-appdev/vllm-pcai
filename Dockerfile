@@ -1,14 +1,15 @@
-# Custom vLLM image with chat templates baked in.
+# Custom vLLM image for HPE PCAI (which cannot mount volumes).
 #
-# HPE PCAI cannot mount volumes through its UI, so the chat templates must
-# live INSIDE the image. They are referenced at runtime via
-#   --chat-template /templates/<file>.jinja
+# The stock vLLM chat templates are ALREADY inside the base image at
+# /vllm-workspace/examples/*.jinja (vLLM's own Dockerfile does `COPY examples examples`),
+# so there is no need to add them.
 #
-# The templates come from the pinned vLLM submodule (./vllm @ v0.22.0), so the
-# base image tag and the templates always match. Bump the submodule to upgrade.
+# This image only adds the ENHANCED Qwen3.5/3.6 chat templates (allanchan339 fix),
+# which are NOT in the base image. They harden the 27B template: proper </think>
+# handling before tool calls, hidden historical reasoning, and XML tool-call
+# formatting that avoids premature stop tokens.
+#
+# Reference at runtime, e.g.:  --chat-template /templates/qwen3.6-enhanced.jinja
 FROM vllm/vllm-openai:v0.22.0
 
-# Copy the chat templates from the pinned vLLM submodule into the image.
-COPY vllm/examples/*.jinja /templates/
-
-# Entrypoint is inherited from the base image (`vllm serve ...`).
+COPY chat-template-fix/chat-template/*.jinja /templates/
