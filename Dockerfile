@@ -10,6 +10,6 @@
 # formatting that avoids premature stop tokens.
 #
 # Reference at runtime, e.g.:  --chat-template /templates/qwen3.6-enhanced.jinja
-FROM vllm/vllm-openai:v0.22.0
+FROM vllm/vllm-openai:v0.22.0-cu129-ubuntu2404
 
 COPY chat-template-fix/chat-template/*.jinja /templates/
