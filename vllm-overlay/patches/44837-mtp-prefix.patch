@@ -1,0 +1,60 @@
+diff --git a/vllm/models/deepseek_v4/amd/mtp.py b/vllm/models/deepseek_v4/amd/mtp.py
+index 5938cde6959c..b41cda3b9ea6 100644
+--- a/vllm/models/deepseek_v4/amd/mtp.py
++++ b/vllm/models/deepseek_v4/amd/mtp.py
+@@ -86,6 +86,7 @@ def __init__(
+             bias=False,
+             return_bias=False,
+             quant_config=quant_config,
++            prefix=f"{prefix}.e_proj",
+         )
+         self.h_proj = ReplicatedLinear(
+             config.hidden_size,
+@@ -93,6 +94,7 @@ def __init__(
+             bias=False,
+             return_bias=False,
+             quant_config=quant_config,
++            prefix=f"{prefix}.h_proj",
+         )
+ 
+         self.hc_eps = config.hc_eps
+diff --git a/vllm/models/deepseek_v4/nvidia/mtp.py b/vllm/models/deepseek_v4/nvidia/mtp.py
+index 133a96e3acdb..167e5d56c21c 100644
+--- a/vllm/models/deepseek_v4/nvidia/mtp.py
++++ b/vllm/models/deepseek_v4/nvidia/mtp.py
+@@ -90,6 +90,7 @@ def __init__(
+             bias=False,
+             return_bias=False,
+             quant_config=quant_config,
++            prefix=f"{prefix}.e_proj",
+         )
+         self.h_proj = ReplicatedLinear(
+             config.hidden_size,
+@@ -97,6 +98,7 @@ def __init__(
+             bias=False,
+             return_bias=False,
+             quant_config=quant_config,
++            prefix=f"{prefix}.h_proj",
+         )
+ 
+         self.hc_eps = config.hc_eps
+diff --git a/vllm/models/deepseek_v4/xpu/mtp.py b/vllm/models/deepseek_v4/xpu/mtp.py
+index 9539a2d99912..6baec16ee966 100644
+--- a/vllm/models/deepseek_v4/xpu/mtp.py
++++ b/vllm/models/deepseek_v4/xpu/mtp.py
+@@ -85,6 +85,7 @@ def __init__(
+             bias=False,
+             return_bias=False,
+             quant_config=quant_config,
++            prefix=f"{prefix}.e_proj",
+         )
+         self.h_proj = ReplicatedLinear(
+             config.hidden_size,
+@@ -92,6 +93,7 @@ def __init__(
+             bias=False,
+             return_bias=False,
+             quant_config=quant_config,
++            prefix=f"{prefix}.h_proj",
+         )
+ 
+         self.hc_eps = config.hc_eps

@@ -1,0 +1,51 @@
+# DeepSeek-V4-Flash + MTP image for HPE PCAI.
+#
+# WHY THIS EXISTS
+# --------------
+# The Canada-Quant `DeepSeek-V4-Flash-W4A16-FP8-MTP` checkpoint keeps its MTP
+# draft tower in BF16 while the main model is FP8/W4A16. Serving it end-to-end
+# with MTP speculative decoding needs two fixes that are NOT in any vLLM release
+# yet (both target `main`, both Python-only — no CUDA changes):
+#
+#   * vllm-project/vllm#44837  pass prefix= to MTP e_proj/h_proj
+#                              (else compressed-tensors can't match the layer)
+#   * vllm-project/vllm#44847  BF16 MTP O-proj fallback for unquantized draft
+#                              weights (NVIDIA path)
+#
+# The O-proj file `vllm/models/deepseek_v4/nvidia/ops/o_proj.py` exists ONLY on
+# `main` (it was refactored into the ops/ subpackage after v0.22.x), so we base
+# on a PINNED per-commit nightly image and overlay the patched Python onto it.
+# Pure-Python overlay => no CUDA recompile.
+#
+# CONSISTENCY INVARIANT
+# ---------------------
+# The two files in vllm-overlay/ were produced by applying the patches in
+# vllm-overlay/patches/ onto the vLLM source at exactly ${VLLM_SHA}. The base
+# image below is the prebuilt nightly for that same commit, so the overlaid
+# Python stays consistent with the image's compiled kernels. If you bump
+# VLLM_SHA, you MUST regenerate the overlay files from that new commit
+# (see vllm-overlay/README.md).
+#
+# Only the NVIDIA path is overlaid (H100 target); amd/ and xpu/ are untouched.
+
+ARG VLLM_SHA=303916e93d66da301231c9aee80489951a5cd8f6
+FROM vllm/vllm-openai:cu129-nightly-${VLLM_SHA}
+
+COPY vllm-overlay/deepseek_v4/nvidia/mtp.py        /tmp/ov/mtp.py
+COPY vllm-overlay/deepseek_v4/nvidia/ops/o_proj.py /tmp/ov/o_proj.py
+
+# Overlay onto the installed package (path resolved at build time, not hardcoded).
+# Guard with py_compile (syntax/bytecode), NOT a full import: o_proj.py pulls in
+# deep_gemm/tilelang kernel wrappers that can require a GPU at import time, which
+# isn't present on the CPU build runner. The patches were applied against this
+# exact commit (preimage blobs matched), so a syntax guard is sufficient here;
+# functional validation happens at serve time on the GPU.
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
+    test -f "${VLLM_DIR}/models/deepseek_v4/nvidia/mtp.py"; \
+    test -f "${VLLM_DIR}/models/deepseek_v4/nvidia/ops/o_proj.py"; \
+    cp /tmp/ov/mtp.py    "${VLLM_DIR}/models/deepseek_v4/nvidia/mtp.py"; \
+    cp /tmp/ov/o_proj.py "${VLLM_DIR}/models/deepseek_v4/nvidia/ops/o_proj.py"; \
+    rm -rf /tmp/ov; \
+    python3 -m py_compile "${VLLM_DIR}/models/deepseek_v4/nvidia/mtp.py" "${VLLM_DIR}/models/deepseek_v4/nvidia/ops/o_proj.py"; \
+    echo "deepseek_v4 nvidia MTP overlay applied + compiled OK"

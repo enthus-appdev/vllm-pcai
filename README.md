@@ -61,6 +61,17 @@ Qwen/Qwen3.6-27B-FP8 --served-model-name Qwen3.6-27B --tensor-parallel-size 1 \
 > The enhanced template uses XML-style tool calls — match the tool-call parser to it per the
 > [fix repo's docs](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix) rather than assuming `qwen3_coder`.
 
+## DeepSeek-V4-Flash MTP image (experimental, separate package)
+
+A second image — `Dockerfile.deepseek` → `ghcr.io/enthus-appdev/vllm-pcai-deepseek-v4`
+— bakes two not-yet-released vLLM fixes ([#44837](https://github.com/vllm-project/vllm/pull/44837),
+[#44847](https://github.com/vllm-project/vllm/pull/44847)) needed to serve the
+Canada-Quant `DeepSeek-V4-Flash-W4A16-FP8-MTP` checkpoint end-to-end with MTP.
+It's based on a **pinned nightly** (the O-proj file only exists on `main`) and
+overlays pre-baked patched Python — no CUDA recompile. See
+[`vllm-overlay/README.md`](vllm-overlay/README.md). The Qwen image above is
+unaffected.
+
 ## Update the fix
 
 ```bash
