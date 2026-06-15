@@ -13,7 +13,7 @@ The **stock** vLLM chat templates are already inside `vllm/vllm-openai` at `/vll
 
 ```
 vllm-pcai/
-├── Dockerfile           # FROM vllm/vllm-openai:v0.22.0-cu129-ubuntu2404  +  COPY enhanced templates → /templates/
+├── Dockerfile           # FROM vllm/vllm-openai:v0.23.0-cu129-ubuntu2404  +  COPY enhanced templates → /templates/
 ├── chat-template-fix/   # git submodule → allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix
 └── .dockerignore        # keeps only the enhanced .jinja in the build context
 ```
