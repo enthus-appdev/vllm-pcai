@@ -9,9 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io
-  # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -22,9 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # No dependency manifests to scan: the repo's own files are Apache-2.0 and
-      # the chat templates come from the vLLM submodule (Apache-2.0, retained
-      # upstream). This gate just asserts the LICENSE file is present.
+      # Intentionally minimal: nothing to scan (repo + submodule templates are Apache-2.0); just assert LICENSE exists.
       - name: Verify LICENSE present
         run: |
           test -f LICENSE
