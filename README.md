@@ -9,11 +9,15 @@ PCAI cannot mount volumes through its UI, so a custom chat template can't be mou
 The **stock** vLLM chat templates are already inside `vllm/vllm-openai` at `/vllm-workspace/examples/*.jinja` (vLLM's own Dockerfile does `COPY examples examples`), so this image does **not** re-add them. It only adds the **enhanced Qwen3.5/3.6 templates** from
 [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image and harden the 27B template (proper `</think>` handling before tool calls, hidden historical reasoning across turns, XML tool-call formatting that avoids premature stop tokens).
 
+## Base image: a pinned nightly, not a release
+
+The `FROM` is a **cu129 nightly** (`cu129-nightly-6607a80d…`), not `v0.23.0`, on purpose: it carries the streaming **ParserEngine** (vLLM #45413 + #45588) so **DFlash's large multi-token drafts don't corrupt streaming tool calls** in opencode — the v0.23.0 release ships only the legacy parser. The nightly is ahead of the v0.23.0 tag and still has DFlash core (#43445) + `qwen3_dflash`. Pinned by commit and bumped deliberately (Dependabot won't auto-track a nightly SHA tag). Trade-off: a nightly is less battle-tested than a release — bump with intent.
+
 ## Layout
 
 ```
 vllm-pcai/
-├── Dockerfile           # FROM vllm/vllm-openai:v0.22.0-cu129-ubuntu2404  +  COPY enhanced templates → /templates/
+├── Dockerfile           # FROM vllm/vllm-openai:cu129-nightly-6607a80d…  +  COPY enhanced templates → /templates/
 ├── chat-template-fix/   # git submodule → allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix
 └── .dockerignore        # keeps only the enhanced .jinja in the build context
 ```
