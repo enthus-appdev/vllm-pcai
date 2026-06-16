@@ -32,8 +32,14 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      image-digest: ${{ steps.build.outputs.digest }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dockerfile: Dockerfile          # production image (no suffix)
+            flavor: ""
+          - dockerfile: Dockerfile.dflash   # experimental DFlash variant → -dflash tags
+            flavor: "-dflash"
     steps:
       - name: Free disk space
         run: |
@@ -45,10 +51,28 @@ jobs:
         with:
           submodules: 'true'
 
+      # The dflash variant only exists on the experimental branch — skip the leg where its Dockerfile is absent.
+      - name: Check Dockerfile exists
+        id: dockerfile
+        run: |
+          if [ -f "${{ matrix.dockerfile }}" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.dockerfile }} absent — skipping this variant"
+          fi
+
+      # Branch name → valid Docker tag (head_ref on PRs, ref_name on push; '/' → '-').
+      - name: Compute branch tag
+        id: ref
+        run: echo "tag=$(echo "${{ github.head_ref || github.ref_name }}" | tr '/' '-' | tr -cd '[:alnum:]._-')" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
+        if: steps.dockerfile.outputs.exists == 'true'
         uses: docker/setup-buildx-action@v4
 
       - name: Login to GitHub Container Registry
+        if: steps.dockerfile.outputs.exists == 'true'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -56,13 +80,16 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
+        if: steps.dockerfile.outputs.exists == 'true'
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            suffix=${{ matrix.flavor }},onlatest=true
           tags: |
-            type=ref,event=branch
             type=ref,event=pr
+            type=raw,value=${{ steps.ref.outputs.tag }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -70,17 +97,21 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
+        if: steps.dockerfile.outputs.exists == 'true'
         id: build
         uses: docker/build-push-action@v7
         with:
           context: .
-          # Build on PRs to validate the Dockerfile, only push on branch/tag/dispatch
-          push: ${{ github.event_name != 'pull_request' }}
+          file: ${{ matrix.dockerfile }}
+          # Experimental variant publishes on PRs too (branch/PR-tagged) for deploy-testing;
+          # production keeps its policy: validate on PR, push only on branch/tag/dispatch.
+          push: ${{ matrix.flavor == '-dflash' || github.event_name != 'pull_request' }}
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache${{ matrix.flavor }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache${{ matrix.flavor }},mode=max
 
       - name: Image digest
-        run: echo ${{ steps.build.outputs.digest }}
+        if: steps.dockerfile.outputs.exists == 'true'
+        run: echo "${{ steps.build.outputs.digest }}"
