@@ -62,11 +62,6 @@ jobs:
             echo "::notice::${{ matrix.dockerfile }} absent — skipping this variant"
           fi
 
-      # Branch name → valid Docker tag (head_ref on PRs, ref_name on push; '/' → '-').
-      - name: Compute branch tag
-        id: ref
-        run: echo "tag=$(echo "${{ github.head_ref || github.ref_name }}" | tr '/' '-' | tr -cd '[:alnum:]._-')" >> "$GITHUB_OUTPUT"
-
       - name: Set up Docker Buildx
         if: steps.dockerfile.outputs.exists == 'true'
         uses: docker/setup-buildx-action@v4
@@ -88,8 +83,8 @@ jobs:
           flavor: |
             suffix=${{ matrix.flavor }},onlatest=true
           tags: |
+            type=ref,event=branch
             type=ref,event=pr
-            type=raw,value=${{ steps.ref.outputs.tag }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
