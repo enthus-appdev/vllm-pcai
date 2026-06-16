@@ -38,8 +38,6 @@ jobs:
         include:
           - dockerfile: Dockerfile               # production image (no suffix)
             flavor: ""
-          - dockerfile: Dockerfile.dflash-swa     # experimental DFlash+#40898 variant → -swa-dflash tags
-            flavor: "-swa-dflash"
     steps:
       - name: Free disk space
         run: |
@@ -51,7 +49,7 @@ jobs:
         with:
           submodules: 'true'
 
-      # The dflash-swa variant only exists on the experimental branch — skip the leg where its Dockerfile is absent.
+      # Skip a matrix leg whose Dockerfile is absent on this branch (guards future per-branch variants).
       - name: Check Dockerfile exists
         id: dockerfile
         run: |
@@ -98,9 +96,8 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          # Experimental variant publishes on PRs too (branch/PR-tagged) for deploy-testing on PCAI;
-          # production keeps its policy: validate on PR, push only on branch/tag/dispatch.
-          push: ${{ matrix.flavor == '-swa-dflash' || github.event_name != 'pull_request' }}
+          # Validate on PR; push only on branch/tag/dispatch.
+          push: ${{ github.event_name != 'pull_request' }}
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
