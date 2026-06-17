@@ -6,7 +6,7 @@
 # Gemma's streaming tool-call leak. The v0.23.0 release has only the legacy parsers. The nightly
 # still ships DFlash core (#43445) + qwen3_dflash, and is ahead of the v0.23.0 tag.
 # Pinned by commit; bump deliberately (Dependabot won't track a nightly SHA tag).
-FROM vllm/vllm-openai:cu129-nightly-6607a80dabfa03932515808895b016d2666b0a55
+FROM vllm/vllm-openai:cu129-nightly-4c626633159887b0f2c962058c17c78f1434556d
 
 # All chat templates baked to /templates/: Qwen enhanced (submodule) + Gemma PR#118 (gemma-template/).
 # Serve with e.g. --chat-template /templates/qwen3.6-enhanced.jinja  or  /templates/gemma-4-31b-pr118.jinja
