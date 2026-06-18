@@ -1,17 +1,13 @@
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
-# Base is a cu129 NIGHTLY (not a release) on purpose: it carries the streaming ParserEngine
-# (vLLM #45413 + #45588). For Qwen that keeps DFlash's large multi-token drafts from corrupting
-# streaming tool calls in opencode; #45588 is also the engine-based gemma4 parser — the fix for
-# Gemma's streaming tool-call leak. The v0.23.0 release has only the legacy parsers. The nightly
-# still ships DFlash core (#43445) + qwen3_dflash, and is ahead of the v0.23.0 tag.
-# Pinned by commit; bump deliberately (Dependabot won't track a nightly SHA tag).
-FROM vllm/vllm-openai:cu129-nightly-4c626633159887b0f2c962058c17c78f1434556d
+# Base is a cu129 NIGHTLY, not a release: needed for the engine streaming parsers (qwen3/gemma4
+# tool-calling + gemma4 reasoning channels) and DFlash, none of which are in v0.23.0. Pinned by
+# commit; bump deliberately (Dependabot won't track a nightly SHA tag).
+FROM vllm/vllm-openai:cu129-nightly-b4c80ec0fd19c13a53d89623bb5957cd5cd631bb
 
-# All chat templates baked to /templates/: Qwen enhanced (submodule) + Gemma PR#118 (gemma-template/).
-# Serve with e.g. --chat-template /templates/qwen3.6-enhanced.jinja  or  /templates/gemma-4-31b-pr118.jinja
+# Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
+#   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
 COPY chat-template-fix/chat-template/*.jinja /templates/
-COPY gemma-template/*.jinja /templates/
 
 # vLLM PR #40898 (DFlash sliding-window attention) baked in — replaces the separate :pr-8-swa-dflash image.
 # Pure-Python overlay (no CUDA recompile): the DFlash drafter's SWA layers get correct windowed attention
