@@ -6,8 +6,10 @@
 def _pcai_collect_env_wrapper(_orig_build_app):
     from fastapi.responses import PlainTextResponse
 
-    def build_app(args):
-        app = _orig_build_app(args)
+    # *args/**kwargs: match whatever signature vLLM's build_app has — it varies across versions
+    # (here it's build_app(args, supported_tasks, model_config)), so never pin it.
+    def build_app(*args, **kwargs):
+        app = _orig_build_app(*args, **kwargs)
 
         # sync def (not async): get_pretty_env_info() is blocking (shells out to nvidia-smi /
         # pip list), so let FastAPI run it in a threadpool instead of stalling the event loop.
