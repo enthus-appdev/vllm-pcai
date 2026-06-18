@@ -33,8 +33,8 @@ print("DFlash+SWA(#40898) overlay import OK:", vllm.__version__)
 PY
 
 # PCAI has no shell and no pod logs, so expose vLLM's collect_env over the serving port as
-# GET /collect_env (secret-scrubbed). No explicit route auth — the LB's per-isvc bearer gates
-# it like every other route here.
+# GET /collect_env. No route auth of its own — the LB's per-isvc bearer is the only gate, same
+# as every other route here.
 COPY diag/collect_env_route.py /tmp/collect_env_route.py
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
