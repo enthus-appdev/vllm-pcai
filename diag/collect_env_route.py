@@ -1,8 +1,7 @@
 
-# Appended to vllm/entrypoints/openai/api_server.py by the image build (see Dockerfile).
-# Adds GET /collect_env -> vLLM's collect_env report (secret-scrubbed). PCAI gives no shell and
-# no pod logs, so this is the only way to retrieve the env report. `build_app` is wrapped (rather
-# than patched in place) so it survives api_server.py line churn across nightly bumps.
+# Appended to vllm/entrypoints/openai/api_server.py at build time — that's why `build_app`
+# (referenced at the bottom) is in scope. Wrapped, not patched in place, to survive
+# api_server.py line churn across nightly base bumps.
 
 def _pcai_collect_env_wrapper(_orig_build_app):
     import re
