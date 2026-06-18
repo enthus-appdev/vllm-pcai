@@ -31,3 +31,13 @@ import vllm.model_executor.models.qwen3_dflash
 import vllm.v1.worker.gpu_model_runner, vllm.v1.core.sched.scheduler, vllm.config.speculative
 print("DFlash+SWA(#40898) overlay import OK:", vllm.__version__)
 PY
+
+# PCAI has no shell and no pod logs, so expose vLLM's collect_env over the serving port:
+# GET /collect_env (secret-scrubbed). No explicit route auth — the LB's per-isvc bearer gates it
+# like every route here. Wraps build_app (not a source patch) to survive api_server.py churn.
+COPY diag/collect_env_route.py /tmp/collect_env_route.py
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
+    cat /tmp/collect_env_route.py >> "$VLLM_DIR/entrypoints/openai/api_server.py"; \
+    rm -f /tmp/collect_env_route.py; \
+    python3 -c "import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); print('collect_env route baked OK')"
