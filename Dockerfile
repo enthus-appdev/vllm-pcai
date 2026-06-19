@@ -48,12 +48,12 @@ RUN set -eux; \
 # the legacy single-token-delta reasoning/tool parsers that leak </think> and mishandle tool calls
 # under MTP / spec decoding (vLLM #43933). One state machine for reasoning AND DSML tool calls.
 # Serve unchanged: --reasoning-parser deepseek_v4 --tool-call-parser deepseek_v4. Pure-Python
-# overlay (no recompile). The patch ALSO carries a local BOS-leak fix (NOT in #45877): drop_tokens=
-# {BOS,EOS} in the configs PLUS an engine encode() fallback in streaming_parser_engine.py — both are
-# needed because DeepSeek's <｜begin▁of▁sentence｜> (id 0) is a control token absent from get_vocab(),
-# so the text-only drop_tokens path resolved to None and the BOS leaked ~20-28% on thinking=false.
-# ⚠️ #45877 is an open draft — re-verify on bump, and upstream the BOS fix so dropping this block
-# doesn't reintroduce the leak. Drop once #45877 (with the fix) lands in base.
+# overlay (no recompile). The patch ALSO carries a local BOS-leak fix (NOT in #45877): the engine's
+# NON-streaming extract_reasoning feeds text with no token ids, so its id-based special-token drop
+# can't fire and a sampled <｜begin▁of▁sentence｜> leaks into content (repro'd ~20-48% on
+# thinking=false; streaming is unaffected — it has token ids). DeepSeekV4Parser.extract_reasoning
+# strips the control tokens from the text. ⚠️ #45877 is an open draft — re-verify on bump, and
+# upstream the BOS fix so dropping this block doesn't reintroduce the leak. Drop once #45877 lands.
 COPY patches/deepseek-v4-45877-on-nightly.patch /tmp/dsv4-45877.patch
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
