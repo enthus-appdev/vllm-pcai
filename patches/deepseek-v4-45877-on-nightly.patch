@@ -478,6 +478,27 @@ index d45a82879..8ce4001a7 100644
  (
      MinimaxM2ParserReasoningAdapter,
      MinimaxM2ParserToolAdapter,
+diff --git a/vllm/parser/engine/streaming_parser_engine.py b/vllm/parser/engine/streaming_parser_engine.py
+index aced61680..0dc90d58b 100644
+--- a/vllm/parser/engine/streaming_parser_engine.py
++++ b/vllm/parser/engine/streaming_parser_engine.py
+@@ -72,6 +72,16 @@ class StreamingParserEngine:
+             all_drop = config.drop_tokens | STRUCTURAL_DROP_TOKENS
+             for token_text in all_drop:
+                 tid = vocab.get(token_text)
++                if tid is None:
++                    # Control tokens (e.g. DeepSeek's <｜begin▁of▁sentence｜>) can be
++                    # absent from get_vocab() yet still encode to a single id; fall back
++                    # to encode so they drop under skip_special_tokens=False.
++                    try:
++                        enc = tokenizer.encode(token_text, add_special_tokens=False)
++                    except Exception:
++                        enc = None
++                    if enc and len(enc) == 1:
++                        tid = enc[0]
+                 if tid is not None:
+                     drop_token_ids.add(tid)
+             for attr in ("eos_token_id", "bos_token_id", "pad_token_id"):
 diff --git a/vllm/reasoning/__init__.py b/vllm/reasoning/__init__.py
 index 7d46faa6d..967f26ab9 100644
 --- a/vllm/reasoning/__init__.py
