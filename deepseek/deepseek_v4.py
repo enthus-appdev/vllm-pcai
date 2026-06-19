@@ -50,9 +50,11 @@ THINK_END = "</think>"
 _THINKING_OFF = frozenset({"false", "disabled", "off", "no", "none", "0"})
 
 
-def _thinking_on(chat_template_kwargs: dict) -> bool:
+def _thinking_on(chat_template_kwargs: dict | None) -> bool:
     """DeepSeek-V4-Flash is a thinking model and we default it on; honor an
     explicit ``thinking``/``enable_thinking`` (bool or enum string) override."""
+    if not chat_template_kwargs:
+        return True
     for key in ("thinking", "enable_thinking"):
         val = chat_template_kwargs.get(key)
         if val is None:
