@@ -479,10 +479,10 @@ index d45a82879..8ce4001a7 100644
      MinimaxM2ParserReasoningAdapter,
      MinimaxM2ParserToolAdapter,
 diff --git a/vllm/parser/engine/streaming_parser_engine.py b/vllm/parser/engine/streaming_parser_engine.py
-index aced61680..0dc90d58b 100644
+index aced61680..bfb805307 100644
 --- a/vllm/parser/engine/streaming_parser_engine.py
 +++ b/vllm/parser/engine/streaming_parser_engine.py
-@@ -72,6 +72,16 @@ class StreamingParserEngine:
+@@ -72,6 +72,22 @@ class StreamingParserEngine:
              all_drop = config.drop_tokens | STRUCTURAL_DROP_TOKENS
              for token_text in all_drop:
                  tid = vocab.get(token_text)
@@ -494,7 +494,13 @@ index aced61680..0dc90d58b 100644
 +                        enc = tokenizer.encode(token_text, add_special_tokens=False)
 +                    except Exception:
 +                        enc = None
-+                    if enc and len(enc) == 1:
++                    # Guard against unk: an unrecognized literal can encode to a single
++                    # unk id, which would silently drop all unknown output tokens.
++                    if (
++                        enc
++                        and len(enc) == 1
++                        and enc[0] != getattr(tokenizer, "unk_token_id", None)
++                    ):
 +                        tid = enc[0]
                  if tid is not None:
                      drop_token_ids.add(tid)
