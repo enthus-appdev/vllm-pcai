@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Intentionally minimal: nothing to scan (repo + submodule templates are Apache-2.0); just assert LICENSE exists.
       - name: Verify LICENSE present
@@ -45,7 +45,7 @@ jobs:
           df -h /
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: 'true'
 
