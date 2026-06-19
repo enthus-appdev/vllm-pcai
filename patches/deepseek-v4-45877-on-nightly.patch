@@ -1,9 +1,9 @@
 diff --git a/vllm/parser/deepseek_v32.py b/vllm/parser/deepseek_v32.py
 new file mode 100644
-index 000000000..a85158580
+index 000000000..51b55e18f
 --- /dev/null
 +++ b/vllm/parser/deepseek_v32.py
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,161 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +"""DeepSeek V3.2 parser: DSML tool calls with ``function_calls`` wrapper.
@@ -109,10 +109,6 @@ index 000000000..a85158580
 +        arg_structural_chars=frozenset(">"),
 +        strip_content_whitespace_with_tools=False,
 +        tool_args_json=False,
-+        # Engine runs with skip_special_tokens=False; the generic <bos>/<eos> drop
-+        # set doesn't match DeepSeek's token names, so a sampled BOS would otherwise
-+        # leak into content (visible on thinking=false).
-+        drop_tokens=frozenset({"<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>"}),
 +    )
 +
 +
@@ -171,10 +167,10 @@ index 000000000..a85158580
 +        return args_json
 diff --git a/vllm/parser/deepseek_v4.py b/vllm/parser/deepseek_v4.py
 new file mode 100644
-index 000000000..76e81cc03
+index 000000000..34fe88ba9
 --- /dev/null
 +++ b/vllm/parser/deepseek_v4.py
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,256 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +"""DeepSeek V4 parser: ``<think>``/``</think>``
@@ -212,6 +208,10 @@ index 000000000..76e81cc03
 +from vllm.tool_parsers.utils import find_tool_properties
 +
 +if TYPE_CHECKING:
++    from vllm.entrypoints.openai.chat_completion.protocol import (
++        ChatCompletionRequest,
++    )
++    from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 +    from vllm.tokenizers import TokenizerLike
 +    from vllm.tool_parsers.abstract_tool_parser import Tool
 +
@@ -350,10 +350,6 @@ index 000000000..76e81cc03
 +        arg_structural_chars=frozenset(">"),
 +        strip_content_whitespace_with_tools=False,
 +        tool_args_json=False,
-+        # Engine runs with skip_special_tokens=False; the generic <bos>/<eos> drop
-+        # set doesn't match DeepSeek's token names, so a sampled BOS would otherwise
-+        # leak into content (visible on thinking=false).
-+        drop_tokens=frozenset({"<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>"}),
 +    )
 +
 +
@@ -376,6 +372,23 @@ index 000000000..76e81cc03
 +            **kwargs,
 +        )
 +        self._arg_converter = self._convert_args
++
++    def extract_reasoning(
++        self,
++        model_output: str,
++        request: ChatCompletionRequest | ResponsesRequest,
++    ) -> tuple[str | None, str | None]:
++        reasoning, content = super().extract_reasoning(model_output, request)
++        # Non-streaming extract_reasoning feeds text with no token ids, so the
++        # engine's id-based special-token drop never fires; strip the control
++        # tokens the model occasionally samples (they leak into content on
++        # thinking=false). Streaming has token ids and drops them already.
++        for ctrl in ("<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>"):
++            if reasoning:
++                reasoning = reasoning.replace(ctrl, "")
++            if content:
++                content = content.replace(ctrl, "")
++        return reasoning or None, content or None
 +
 +    def _convert_args(self, raw_args: str, partial: bool) -> str:
 +        result = _dsml_arg_converter(raw_args, partial)
@@ -478,33 +491,6 @@ index d45a82879..8ce4001a7 100644
  (
      MinimaxM2ParserReasoningAdapter,
      MinimaxM2ParserToolAdapter,
-diff --git a/vllm/parser/engine/streaming_parser_engine.py b/vllm/parser/engine/streaming_parser_engine.py
-index aced61680..bfb805307 100644
---- a/vllm/parser/engine/streaming_parser_engine.py
-+++ b/vllm/parser/engine/streaming_parser_engine.py
-@@ -72,6 +72,22 @@ class StreamingParserEngine:
-             all_drop = config.drop_tokens | STRUCTURAL_DROP_TOKENS
-             for token_text in all_drop:
-                 tid = vocab.get(token_text)
-+                if tid is None:
-+                    # Control tokens (e.g. DeepSeek's <｜begin▁of▁sentence｜>) can be
-+                    # absent from get_vocab() yet still encode to a single id; fall back
-+                    # to encode so they drop under skip_special_tokens=False.
-+                    try:
-+                        enc = tokenizer.encode(token_text, add_special_tokens=False)
-+                    except Exception:
-+                        enc = None
-+                    # Guard against unk: an unrecognized literal can encode to a single
-+                    # unk id, which would silently drop all unknown output tokens.
-+                    if (
-+                        enc
-+                        and len(enc) == 1
-+                        and enc[0] != getattr(tokenizer, "unk_token_id", None)
-+                    ):
-+                        tid = enc[0]
-                 if tid is not None:
-                     drop_token_ids.add(tid)
-             for attr in ("eos_token_id", "bos_token_id", "pad_token_id"):
 diff --git a/vllm/reasoning/__init__.py b/vllm/reasoning/__init__.py
 index 7d46faa6d..967f26ab9 100644
 --- a/vllm/reasoning/__init__.py
