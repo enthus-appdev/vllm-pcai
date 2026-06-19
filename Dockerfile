@@ -41,3 +41,30 @@ RUN set -eux; \
     cat /tmp/collect_env_route.py >> "$VLLM_DIR/entrypoints/openai/api_server.py"; \
     rm -f /tmp/collect_env_route.py; \
     python3 -c "import inspect; import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); assert any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in inspect.signature(m.build_app, follow_wrapped=False).parameters.values()), 'wrapped build_app must stay variadic'; print('collect_env route baked OK')"
+
+# DeepSeek V4 reasoning on the streaming parser engine (chunk-size-invariant), replacing the
+# legacy single-token-delta reasoning parser that leaks </think> and raw reasoning into content
+# when MTP / speculative decoding emits multi-token deltas (vllm#43933; the #45413 engine the
+# nightly already carries was never wired to DeepSeek). Reasoning only — DeepSeek tool calls stay
+# on the `deepseek_v4` TOOL parser (different token format). Serve unchanged: --reasoning-parser
+# deepseek_v4. Pure-Python overlay (no recompile). Drop once an engine deepseek parser lands upstream.
+COPY deepseek/deepseek_v4.py /tmp/dsv4/deepseek_v4.py
+COPY deepseek/deepseek_v4_engine_reasoning_parser.py /tmp/dsv4/deepseek_v4_engine_reasoning_parser.py
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
+    cp /tmp/dsv4/deepseek_v4.py "$VLLM_DIR/parser/deepseek_v4.py"; \
+    cp /tmp/dsv4/deepseek_v4_engine_reasoning_parser.py "$VLLM_DIR/reasoning/deepseek_v4_engine_reasoning_parser.py"; \
+    printf '\n\n# vllm-pcai overlay: route deepseek_v4 reasoning through the streaming parser engine.\nReasoningParserManager.register_lazy_module(\n    "deepseek_v4",\n    "vllm.reasoning.deepseek_v4_engine_reasoning_parser",\n    "DeepSeekV4ParserReasoningAdapter",\n)\n' >> "$VLLM_DIR/reasoning/__init__.py"; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -rf /tmp/dsv4
+
+# Build-time tripwire: a broken overlay fails HERE (does NOT prove streaming correctness — needs GPU).
+RUN python3 - <<'PY'
+from vllm.reasoning import ReasoningParserManager
+cls = ReasoningParserManager.get_reasoning_parser("deepseek_v4")
+assert cls.__name__ == "DeepSeekV4ParserReasoningAdapter", cls
+from vllm.parser.deepseek_v4 import deepseek_v4_config
+assert deepseek_v4_config(thinking=True).initial_state.name == "REASONING"
+assert deepseek_v4_config(thinking=False).initial_state.name == "CONTENT"
+print("deepseek_v4 engine reasoning parser baked OK:", cls.__module__)
+PY
