@@ -99,3 +99,33 @@ assert "model_output_token_ids" in inspect.signature(ParserEngine.extract_reason
 assert "model_output_token_ids" in inspect.signature(DelegatingParser.extract_reasoning).parameters
 print("46225 non-streaming token-id wire-through baked OK")
 PY
+
+# Make the deepseek_v4/v32 tokenizer-mode encoders honor add_generation_prompt +
+# continue_final_message (they otherwise silently ignore both). Rationale + evidence in the PR.
+# Vendored overlay; drop once upstreamed into the base nightly.
+COPY patches/deepseek-add-gen-prompt-on-nightly.patch /tmp/dsv4-genprompt.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-genprompt.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dsv4-genprompt.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dsv4-genprompt.patch
+
+# Build-time tripwire: behavioral (pure templating, no GPU) — verifies both params are honored.
+RUN python3 - <<'PY'
+from vllm.tokenizers.deepseek_v4_encoding import (
+    encode_messages, ASSISTANT_SP_TOKEN as A, eos_token as EOS, thinking_end_token as ET,
+)
+u = [{"role": "user", "content": "hi"}]
+a = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+assert encode_messages(u, thinking_mode="chat", add_generation_prompt=True).endswith(A + ET)
+assert A not in encode_messages(u, thinking_mode="chat", add_generation_prompt=False)
+try:
+    encode_messages(a, thinking_mode="chat", add_generation_prompt=True)
+    raise AssertionError("expected ValueError: add_generation_prompt + assistant-last")
+except ValueError:
+    pass
+c = encode_messages(a, thinking_mode="chat", continue_final_message=True)
+assert c.endswith("yo") and not c.endswith(EOS) and A in c
+print("deepseek add_generation_prompt / continue_final_message honored OK")
+PY
