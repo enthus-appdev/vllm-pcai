@@ -167,10 +167,10 @@ index 000000000..51b55e18f
 +        return args_json
 diff --git a/vllm/parser/deepseek_v4.py b/vllm/parser/deepseek_v4.py
 new file mode 100644
-index 000000000..34fe88ba9
+index 000000000..90c407699
 --- /dev/null
 +++ b/vllm/parser/deepseek_v4.py
-@@ -0,0 +1,256 @@
+@@ -0,0 +1,235 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +"""DeepSeek V4 parser: ``<think>``/``</think>``
@@ -208,10 +208,6 @@ index 000000000..34fe88ba9
 +from vllm.tool_parsers.utils import find_tool_properties
 +
 +if TYPE_CHECKING:
-+    from vllm.entrypoints.openai.chat_completion.protocol import (
-+        ChatCompletionRequest,
-+    )
-+    from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 +    from vllm.tokenizers import TokenizerLike
 +    from vllm.tool_parsers.abstract_tool_parser import Tool
 +
@@ -372,23 +368,6 @@ index 000000000..34fe88ba9
 +            **kwargs,
 +        )
 +        self._arg_converter = self._convert_args
-+
-+    def extract_reasoning(
-+        self,
-+        model_output: str,
-+        request: ChatCompletionRequest | ResponsesRequest,
-+    ) -> tuple[str | None, str | None]:
-+        reasoning, content = super().extract_reasoning(model_output, request)
-+        # Non-streaming extract_reasoning feeds text with no token ids, so the
-+        # engine's id-based special-token drop never fires; strip the control
-+        # tokens the model occasionally samples (they leak into content on
-+        # thinking=false). Streaming has token ids and drops them already.
-+        for ctrl in ("<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>"):
-+            if reasoning:
-+                reasoning = reasoning.replace(ctrl, "")
-+            if content:
-+                content = content.replace(ctrl, "")
-+        return reasoning or None, content or None
 +
 +    def _convert_args(self, raw_args: str, partial: bool) -> str:
 +        result = _dsml_arg_converter(raw_args, partial)
