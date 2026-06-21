@@ -120,11 +120,7 @@ u = [{"role": "user", "content": "hi"}]
 a = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
 assert encode_messages(u, thinking_mode="chat", add_generation_prompt=True).endswith(A + ET)
 assert A not in encode_messages(u, thinking_mode="chat", add_generation_prompt=False)
-try:
-    encode_messages(a, thinking_mode="chat", add_generation_prompt=True)
-    raise AssertionError("expected ValueError: add_generation_prompt + assistant-last")
-except ValueError:
-    pass
+assert encode_messages(a, thinking_mode="chat", add_generation_prompt=True).endswith(A + ET)
 c = encode_messages(a, thinking_mode="chat", continue_final_message=True)
 assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
