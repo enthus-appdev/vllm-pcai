@@ -407,10 +407,10 @@ index 000000000..90c407699
 +                return json.dumps(inner, ensure_ascii=False)
 +        return args_json
 diff --git a/vllm/parser/engine/parser_engine.py b/vllm/parser/engine/parser_engine.py
-index 237e27456..38a9222ff 100644
+index 497eb9039..36049dd24 100644
 --- a/vllm/parser/engine/parser_engine.py
 +++ b/vllm/parser/engine/parser_engine.py
-@@ -99,7 +99,11 @@ class ParserEngine(Parser):
+@@ -108,7 +108,11 @@ class ParserEngine(Parser):
              parser_engine_config, tokenizer, vocab=self.vocab
          )
  
@@ -423,7 +423,7 @@ index 237e27456..38a9222ff 100644
          self._streaming_initialized: bool = False
          self._prompt_streaming_prepared: bool = False
  
-@@ -176,7 +180,7 @@ class ParserEngine(Parser):
+@@ -187,7 +191,7 @@ class ParserEngine(Parser):
  
      def _reset(self, initial_state: ParserState | None = None) -> None:
          self._engine.reset(initial_state=initial_state)
@@ -432,7 +432,7 @@ index 237e27456..38a9222ff 100644
          self._tool_slots.clear()
          self._deferred_content = ""
          self._deferred_reasoning = ""
-@@ -243,7 +247,7 @@ class ParserEngine(Parser):
+@@ -254,7 +258,7 @@ class ParserEngine(Parser):
          types = extract_types_from_schema(schema)
          as_str = json.dumps(value, ensure_ascii=False)
          coerced = coerce_to_schema_type(as_str, types)
@@ -442,10 +442,10 @@ index 237e27456..38a9222ff 100644
          return value, False
  
 diff --git a/vllm/parser/engine/registered_adapters.py b/vllm/parser/engine/registered_adapters.py
-index d45a82879..8ce4001a7 100644
+index c5250abf8..6151341b9 100644
 --- a/vllm/parser/engine/registered_adapters.py
 +++ b/vllm/parser/engine/registered_adapters.py
-@@ -7,12 +7,24 @@ names so that :class:`ReasoningParserManager` and
+@@ -7,6 +7,8 @@ names so that :class:`ReasoningParserManager` and
  :class:`ToolParserManager` can load them lazily.
  """
  
@@ -453,9 +453,10 @@ index d45a82879..8ce4001a7 100644
 +from vllm.parser.deepseek_v32 import DeepSeekV32Parser
  from vllm.parser.engine.adapters import make_adapters
  from vllm.parser.gemma4 import Gemma4Parser
- from vllm.parser.minimax_m2 import MinimaxM2Parser
- from vllm.parser.nemotron_v3 import NemotronV3Parser
+ from vllm.parser.glm47_moe import Glm47MoeParser
+@@ -15,6 +17,16 @@ from vllm.parser.nemotron_v3 import NemotronV3Parser
  from vllm.parser.qwen3 import Qwen3Parser
+ from vllm.parser.seed_oss import SeedOssParser
  
 +(
 +    DeepSeekV32ParserReasoningAdapter,
@@ -471,7 +472,7 @@ index d45a82879..8ce4001a7 100644
      MinimaxM2ParserReasoningAdapter,
      MinimaxM2ParserToolAdapter,
 diff --git a/vllm/reasoning/__init__.py b/vllm/reasoning/__init__.py
-index 7d46faa6d..967f26ab9 100644
+index fc74cf2f3..ba5ed4718 100644
 --- a/vllm/reasoning/__init__.py
 +++ b/vllm/reasoning/__init__.py
 @@ -29,8 +29,8 @@ _REASONING_PARSERS_TO_REGISTER = {
@@ -498,7 +499,7 @@ index 000000000..6fa6444b3
 +
 +__all__ = ["DeepSeekV4ParserReasoningAdapter"]
 diff --git a/vllm/tool_parsers/__init__.py b/vllm/tool_parsers/__init__.py
-index 407e57ca2..1b036eacc 100644
+index b9a9c9ad0..26362ebf0 100644
 --- a/vllm/tool_parsers/__init__.py
 +++ b/vllm/tool_parsers/__init__.py
 @@ -31,12 +31,12 @@ _TOOL_PARSERS_TO_REGISTER = {

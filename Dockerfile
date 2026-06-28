@@ -1,36 +1,14 @@
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
 # Base is a cu129 NIGHTLY, not a release: needed for the engine streaming parsers (qwen3/gemma4
-# tool-calling + gemma4 reasoning channels) and DFlash, none of which are in v0.23.0. Pinned by
-# commit; bump deliberately (Dependabot won't track a nightly SHA tag).
-FROM vllm/vllm-openai:cu129-nightly-b4c80ec0fd19c13a53d89623bb5957cd5cd631bb
+# tool-calling + gemma4 reasoning channels), DFlash, and the DeepSeek-V4 DSpark prereqs (warmup
+# modules + sparse_swa), none of which are in v0.23.0. Pinned by commit; bump deliberately
+# (Dependabot won't track a nightly SHA tag).
+FROM vllm/vllm-openai:cu129-nightly-a65f93fb2e295e501b929df3c291ec89c27d39e8
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
 COPY chat-template-fix/chat-template/*.jinja /templates/
-
-# vLLM PR #40898 (DFlash sliding-window attention) baked in — replaces the separate :pr-8-swa-dflash image.
-# Pure-Python overlay (no CUDA recompile): the DFlash drafter's SWA layers get correct windowed attention
-# → deep-position acceptance at high k (~5-10% wall-clock on Qwen). Inert for MTP models (Gemma). Drop this
-# block once #40898 merges upstream and the nightly base carries it. ⚠️ A clean apply is NOT proof of
-# correctness — an earlier hand-port applied fine yet gave 6% acceptance; validate the GPU per-position
-# curve. Keep --attention-backend flash_attn (FlashInfer + #40898 crashes "Window left ...", vLLM #39995).
-COPY patches/40898-on-nightly.patch /tmp/40898.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/40898.patch; \
-    else patch -p1 -d "$SITE" < /tmp/40898.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/40898.patch
-
-# Build-time tripwire: a broken/partial apply fails HERE (does NOT catch the 6% semantic bug — needs GPU).
-RUN python3 - <<'PY'
-import vllm
-import vllm.v1.spec_decode.dflash, vllm.v1.spec_decode.llm_base_proposer
-import vllm.model_executor.models.qwen3_dflash
-import vllm.v1.worker.gpu_model_runner, vllm.v1.core.sched.scheduler, vllm.config.speculative
-print("DFlash+SWA(#40898) overlay import OK:", vllm.__version__)
-PY
 
 # PCAI has no shell and no pod logs, so expose vLLM's collect_env over the serving port as
 # GET /collect_env. No route auth of its own — the LB's per-isvc bearer is the only gate, same
@@ -43,9 +21,8 @@ RUN set -eux; \
     python3 -c "import inspect; import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); assert any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in inspect.signature(m.build_app, follow_wrapped=False).parameters.values()), 'wrapped build_app must stay variadic'; print('collect_env route baked OK')"
 
 # DeepSeek V4 + V3.2 parsers ported to the streaming parser engine — vendored from upstream
-# vLLM PR #45877 (https://github.com/vllm-project/vllm/pull/45877), rebased onto this base
-# (only registered_adapters.py needed re-resolving — this base predates the GLM parser). Replaces
-# the legacy single-token-delta reasoning/tool parsers that leak </think> and mishandle tool calls
+# vLLM PR #45877 (https://github.com/vllm-project/vllm/pull/45877), rebased onto the base nightly.
+# Replaces the legacy single-token-delta reasoning/tool parsers that leak </think> and mishandle tool calls
 # under MTP / spec decoding (vLLM #43933). One state machine for reasoning AND DSML tool calls.
 # Serve unchanged: --reasoning-parser deepseek_v4 --tool-call-parser deepseek_v4. Pure-Python
 # overlay (no recompile). Plain #45877 now — the DeepSeek-only non-streaming BOS strip that used to
@@ -124,4 +101,30 @@ assert encode_messages(a, thinking_mode="chat", add_generation_prompt=True).ends
 c = encode_messages(a, thinking_mode="chat", continue_final_message=True)
 assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
+PY
+
+# vLLM PR #46965 (https://github.com/vllm-project/vllm/pull/46965) — DeepSeek-V4 DSpark spec decode:
+# a block-parallel draft over the checkpoint's mtp.* weights (NOT serial MTP). Reuses the Hopper-proven
+# mhc TileLang kernels; no CUDA recompile. Needs the DSpark checkpoint deepseek-ai/DeepSeek-V4-Flash-DSpark
+# (carries dspark_block_size / dspark_target_layer_ids / dspark_noise_token_id) + cudagraphs; serve
+# --speculative-config {"method":"dspark","num_speculative_tokens":5}. ⚠️ Open draft, validated ONLY on
+# Blackwell — Hopper boot + acceptance are UNVERIFIED (cudagraph-on-Hopper is the live risk; we otherwise
+# run --enforce-eager). GPU-validate; drop once it lands in the base nightly.
+COPY patches/dspark-46965-on-nightly.patch /tmp/dspark.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dspark.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dspark.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dspark.patch
+
+# Build-time tripwire: import-only (a broken apply fails HERE; does NOT prove the Hopper kernels lower or
+# that acceptance is good — both need GPU + the DSpark checkpoint).
+RUN python3 - <<'PY'
+import vllm
+from vllm.config.speculative import SpeculativeMethod
+assert "dspark" in repr(SpeculativeMethod), repr(SpeculativeMethod)
+import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401  (model-side draft module)
+import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401  (worker-side speculator)
+print("DSpark(#46965) overlay import OK:", vllm.__version__)
 PY
