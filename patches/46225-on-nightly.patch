@@ -1,8 +1,8 @@
 diff --git a/vllm/parser/abstract_parser.py b/vllm/parser/abstract_parser.py
-index 11fca8e43..428801d68 100644
+index 62275ff22..290910e5a 100644
 --- a/vllm/parser/abstract_parser.py
 +++ b/vllm/parser/abstract_parser.py
-@@ -359,9 +359,17 @@ class DelegatingParser(Parser):
+@@ -386,9 +386,17 @@ class DelegatingParser(Parser):
          self,
          model_output: str,
          request: ChatCompletionRequest | ResponsesRequest,
@@ -20,10 +20,10 @@ index 11fca8e43..428801d68 100644
          return self._reasoning_parser.extract_reasoning(model_output, request)
  
      def _get_function_name(
-@@ -733,7 +741,9 @@ class DelegatingParser(Parser):
-         enable_auto_tools: bool = False,
+@@ -776,7 +784,9 @@ class DelegatingParser(Parser):
          model_output_token_ids: Sequence[int] = (),
      ) -> tuple[str | None, str | None, list[FunctionCall] | None]:
+         self._initialize_history_tool_call_cnt(request)
 -        reasoning, content = self.extract_reasoning(model_output, request)
 +        reasoning, content = self.extract_reasoning(
 +            model_output, request, model_output_token_ids
@@ -50,10 +50,10 @@ index 2482dad43..6e7b7913a 100644
      def extract_reasoning_streaming(
          self,
 diff --git a/vllm/parser/engine/parser_engine.py b/vllm/parser/engine/parser_engine.py
-index ba838d31a..3c4d061fd 100644
+index 497eb9039..81c5d39a8 100644
 --- a/vllm/parser/engine/parser_engine.py
 +++ b/vllm/parser/engine/parser_engine.py
-@@ -421,9 +421,12 @@ class ParserEngine(Parser):
+@@ -476,9 +476,12 @@ class ParserEngine(Parser):
          self,
          model_output: str,
          request: ChatCompletionRequest | ResponsesRequest,
