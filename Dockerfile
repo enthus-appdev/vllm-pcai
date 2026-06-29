@@ -103,14 +103,19 @@ assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
 PY
 
-# vLLM PR #46965 (https://github.com/vllm-project/vllm/pull/46965) — DeepSeek-V4 DSpark spec decode:
-# a block-parallel draft over the checkpoint's mtp.* weights (NOT serial MTP). Reuses the Hopper-proven
-# mhc TileLang kernels; no CUDA recompile. Needs the DSpark checkpoint deepseek-ai/DeepSeek-V4-Flash-DSpark
-# (carries dspark_block_size / dspark_target_layer_ids / dspark_noise_token_id) + cudagraphs; serve
-# --speculative-config {"method":"dspark","num_speculative_tokens":5}. ⚠️ Open draft, validated ONLY on
-# Blackwell — Hopper boot + acceptance are UNVERIFIED (cudagraph-on-Hopper is the live risk; we otherwise
-# run --enforce-eager). GPU-validate; drop once it lands in the base nightly.
-COPY patches/dspark-46965-on-nightly.patch /tmp/dspark.patch
+# vLLM PR #46995 (https://github.com/vllm-project/vllm/pull/46995) — DeepSeek-V4 DSpark spec decode,
+# the author's official PR (benchislett/NVIDIA). Supersedes the codex draft #46965 we used to vendor.
+# Block-parallel draft over the checkpoint's mtp.* weights (NOT serial MTP). Unlike #46965 it adds NO new
+# TileLang kernels — it reuses the existing SparseMLA backends (expanded-topk non-causal SWA), so the
+# cold-JIT footprint is smaller. Needs the DSpark checkpoint deepseek-ai/DeepSeek-V4-Flash-DSpark +
+# cudagraphs (captures the DFlash backbone + AR sampling loop in one graph — can't run --enforce-eager);
+# serve --speculative-config {"method":"dspark","num_speculative_tokens":5}.
+# ⚠️ Open PR, validated ONLY on Blackwell (8×B300). Hopper boot UNVERIFIED — our #46965 attempt HUNG on
+# 2×H100 at the first joint forward (cudagraph capture / cold JIT); reusing the existing sparse kernels
+# may sidestep that, but cudagraph-on-Hopper stays the live risk (we otherwise run --enforce-eager).
+# Author's Known Issue: draft_sample_method=probabilistic degrades into loops/junk — leave it default.
+# GPU-validate; drop once it lands in the base nightly.
+COPY patches/dspark-46995-on-nightly.patch /tmp/dspark.patch
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dspark.patch; \
@@ -126,5 +131,5 @@ from vllm.config.speculative import SpeculativeMethod
 assert "dspark" in repr(SpeculativeMethod), repr(SpeculativeMethod)
 import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401  (model-side draft module)
 import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401  (worker-side speculator)
-print("DSpark(#46965) overlay import OK:", vllm.__version__)
+print("DSpark(#46995) overlay import OK:", vllm.__version__)
 PY
