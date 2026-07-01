@@ -407,7 +407,7 @@ index 000000000..90c407699
 +                return json.dumps(inner, ensure_ascii=False)
 +        return args_json
 diff --git a/vllm/parser/engine/parser_engine.py b/vllm/parser/engine/parser_engine.py
-index 497eb9039..36049dd24 100644
+index 91d6881ca..6f21cbca7 100644
 --- a/vllm/parser/engine/parser_engine.py
 +++ b/vllm/parser/engine/parser_engine.py
 @@ -108,7 +108,11 @@ class ParserEngine(Parser):
@@ -423,7 +423,7 @@ index 497eb9039..36049dd24 100644
          self._streaming_initialized: bool = False
          self._prompt_streaming_prepared: bool = False
  
-@@ -187,7 +191,7 @@ class ParserEngine(Parser):
+@@ -188,7 +192,7 @@ class ParserEngine(Parser):
  
      def _reset(self, initial_state: ParserState | None = None) -> None:
          self._engine.reset(initial_state=initial_state)
@@ -432,7 +432,7 @@ index 497eb9039..36049dd24 100644
          self._tool_slots.clear()
          self._deferred_content = ""
          self._deferred_reasoning = ""
-@@ -254,7 +258,7 @@ class ParserEngine(Parser):
+@@ -255,7 +259,7 @@ class ParserEngine(Parser):
          types = extract_types_from_schema(schema)
          as_str = json.dumps(value, ensure_ascii=False)
          coerced = coerce_to_schema_type(as_str, types)
@@ -442,7 +442,7 @@ index 497eb9039..36049dd24 100644
          return value, False
  
 diff --git a/vllm/parser/engine/registered_adapters.py b/vllm/parser/engine/registered_adapters.py
-index c5250abf8..6151341b9 100644
+index fdcbf81ee..889c71504 100644
 --- a/vllm/parser/engine/registered_adapters.py
 +++ b/vllm/parser/engine/registered_adapters.py
 @@ -7,6 +7,8 @@ names so that :class:`ReasoningParserManager` and
@@ -454,7 +454,7 @@ index c5250abf8..6151341b9 100644
  from vllm.parser.engine.adapters import make_adapters
  from vllm.parser.gemma4 import Gemma4Parser
  from vllm.parser.glm47_moe import Glm47MoeParser
-@@ -15,6 +17,16 @@ from vllm.parser.nemotron_v3 import NemotronV3Parser
+@@ -16,6 +18,16 @@ from vllm.parser.nemotron_v3 import NemotronV3Parser
  from vllm.parser.qwen3 import Qwen3Parser
  from vllm.parser.seed_oss import SeedOssParser
  

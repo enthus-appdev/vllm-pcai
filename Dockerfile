@@ -4,7 +4,7 @@
 # tool-calling + gemma4 reasoning channels), DFlash, and the DeepSeek-V4 DSpark prereqs (warmup
 # modules + sparse_swa), none of which are in v0.23.0. Pinned by commit; bump deliberately
 # (Dependabot won't track a nightly SHA tag).
-FROM vllm/vllm-openai:cu129-nightly-a65f93fb2e295e501b929df3c291ec89c27d39e8
+FROM vllm/vllm-openai:cu129-nightly-93d8f834dd8acf33eb0e2a75b2711b628cb6e226
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -25,8 +25,8 @@ RUN set -eux; \
 # Replaces the legacy single-token-delta reasoning/tool parsers that leak </think> and mishandle tool calls
 # under MTP / spec decoding (vLLM #43933). One state machine for reasoning AND DSML tool calls.
 # Serve unchanged: --reasoning-parser deepseek_v4 --tool-call-parser deepseek_v4. Pure-Python
-# overlay (no recompile). Plain #45877 now — the DeepSeek-only non-streaming BOS strip that used to
-# live here is replaced by the general engine fix in 46225-on-nightly.patch (applied below).
+# overlay (no recompile). Plain #45877: the non-streaming special-token-leak fix formerly vendored
+# here as #46225 now ships IN the base nightly (upstream #46875, merged 2026-06-30) — not carried here.
 # ⚠️ #45877 is an open draft — re-verify on bump; drop this block once it lands in the base nightly.
 COPY patches/deepseek-v4-45877-on-nightly.patch /tmp/dsv4-45877.patch
 RUN set -eux; \
@@ -49,32 +49,6 @@ import vllm.parser.deepseek_v32  # V3.2 sibling ported in the same PR
 assert deepseek_v4_config(thinking=True).initial_state.name == "REASONING"
 assert deepseek_v4_config(thinking=False).initial_state.name == "CONTENT"
 print("deepseek_v4/v32 engine parsers baked OK:", r.__module__, "/", t.__module__)
-PY
-
-# vLLM PR #46225 (https://github.com/vllm-project/vllm/pull/46225) — the general upstream fix for
-# the non-streaming special-token leak (the DeepSeek BOS leak is one instance). The engine scanner
-# drops bos/eos/pad by token id, but non-streaming extract_reasoning fed an empty id list so the
-# drop never fired. This threads the model output token ids through DelegatingParser.parse ->
-# extract_reasoning -> ParserEngine._feed (only for engine_based_streaming parsers), so the scanner
-# drops by id in non-streaming too — replacing the old DeepSeek-only string-strip. Pure-Python
-# overlay. ⚠️ Open PR (changes-requested iteration) — re-verify on bump; drop once it lands in base.
-COPY patches/46225-on-nightly.patch /tmp/46225.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/46225.patch; \
-    else patch -p1 -d "$SITE" < /tmp/46225.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/46225.patch
-
-# Build-time tripwire: confirms the wire-through applied (a broken apply fails HERE). Runtime BOS
-# drop still needs the live model — re-run the thinking=false repro after deploy to confirm 0%.
-RUN python3 - <<'PY'
-import inspect
-from vllm.parser.engine.parser_engine import ParserEngine
-from vllm.parser.abstract_parser import DelegatingParser
-assert "model_output_token_ids" in inspect.signature(ParserEngine.extract_reasoning).parameters
-assert "model_output_token_ids" in inspect.signature(DelegatingParser.extract_reasoning).parameters
-print("46225 non-streaming token-id wire-through baked OK")
 PY
 
 # Make the deepseek_v4/v32 tokenizer-mode encoders honor add_generation_prompt +
