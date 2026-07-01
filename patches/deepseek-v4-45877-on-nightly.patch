@@ -1,9 +1,9 @@
 diff --git a/vllm/parser/deepseek_v32.py b/vllm/parser/deepseek_v32.py
 new file mode 100644
-index 000000000..51b55e18f
+index 000000000..1e9440362
 --- /dev/null
 +++ b/vllm/parser/deepseek_v32.py
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,163 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +"""DeepSeek V3.2 parser: DSML tool calls with ``function_calls`` wrapper.
@@ -32,6 +32,7 @@ index 000000000..51b55e18f
 +    DSML_INVOKE_END,
 +    DSML_INVOKE_NAME_END,
 +    DSML_INVOKE_PREFIX,
++    DSML_PARAM_CLOSE,
 +    _dsml_arg_converter,
 +)
 +from vllm.parser.engine.events import EventType
@@ -64,6 +65,7 @@ index 000000000..51b55e18f
 +            "INVOKE_PREFIX": DSML_INVOKE_PREFIX,
 +            "INVOKE_NAME_END": DSML_INVOKE_NAME_END,
 +            "INVOKE_END": DSML_INVOKE_END,
++            "PARAM_CLOSE": DSML_PARAM_CLOSE,
 +        },
 +        token_id_terminals={
 +            "TOOL_START": DSML_FUNC_START,
@@ -167,10 +169,10 @@ index 000000000..51b55e18f
 +        return args_json
 diff --git a/vllm/parser/deepseek_v4.py b/vllm/parser/deepseek_v4.py
 new file mode 100644
-index 000000000..90c407699
+index 000000000..e14d6b1a9
 --- /dev/null
 +++ b/vllm/parser/deepseek_v4.py
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,237 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +"""DeepSeek V4 parser: ``<think>``/``</think>``
@@ -220,6 +222,7 @@ index 000000000..90c407699
 +DSML_INVOKE_PREFIX = f'<{_DSML}invoke name="'
 +DSML_INVOKE_NAME_END = '">'
 +DSML_INVOKE_END = f"</{_DSML}invoke>"
++DSML_PARAM_CLOSE = f"</{_DSML}parameter>"
 +
 +_ESCAPED_DSML = re.escape(_DSML)
 +_PARAM_RE = re.compile(
@@ -275,6 +278,7 @@ index 000000000..90c407699
 +            "INVOKE_PREFIX": DSML_INVOKE_PREFIX,
 +            "INVOKE_NAME_END": DSML_INVOKE_NAME_END,
 +            "INVOKE_END": DSML_INVOKE_END,
++            "PARAM_CLOSE": DSML_PARAM_CLOSE,
 +        },
 +        token_id_terminals={
 +            "THINK_START": DSML_THINK_START,
