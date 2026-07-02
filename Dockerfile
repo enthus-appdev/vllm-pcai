@@ -4,7 +4,7 @@
 # tool-calling + gemma4 reasoning channels), DFlash, and the DeepSeek-V4 DSpark prereqs (warmup
 # modules + sparse_swa), none of which are in v0.23.0. Pinned by commit; bump deliberately
 # (Dependabot won't track a nightly SHA tag).
-FROM vllm/vllm-openai:cu129-nightly-93d8f834dd8acf33eb0e2a75b2711b628cb6e226
+FROM vllm/vllm-openai:cu129-nightly-09663abde0f50944a8d5ea30120666024b503faa
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -77,33 +77,18 @@ assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
 PY
 
-# vLLM PR #46995 (https://github.com/vllm-project/vllm/pull/46995) — DeepSeek-V4 DSpark spec decode,
-# the author's official PR (benchislett/NVIDIA). Supersedes the codex draft #46965 we used to vendor.
-# Block-parallel draft over the checkpoint's mtp.* weights (NOT serial MTP). Unlike #46965 it adds NO new
-# TileLang kernels — it reuses the existing SparseMLA backends (expanded-topk non-causal SWA), so the
-# cold-JIT footprint is smaller. Needs the DSpark checkpoint deepseek-ai/DeepSeek-V4-Flash-DSpark +
-# cudagraphs (captures the DFlash backbone + AR sampling loop in one graph — can't run --enforce-eager);
-# serve --speculative-config {"method":"dspark","num_speculative_tokens":5}.
-# ⚠️ Open PR, validated ONLY on Blackwell (8×B300). Hopper boot UNVERIFIED — our #46965 attempt HUNG on
-# 2×H100 at the first joint forward (cudagraph capture / cold JIT); reusing the existing sparse kernels
-# may sidestep that, but cudagraph-on-Hopper stays the live risk (we otherwise run --enforce-eager).
-# Author's Known Issue: draft_sample_method=probabilistic degrades into loops/junk — leave it default.
-# GPU-validate; drop once it lands in the base nightly.
-COPY patches/dspark-46995-on-nightly.patch /tmp/dspark.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dspark.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dspark.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/dspark.patch
-
-# Build-time tripwire: import-only (a broken apply fails HERE; does NOT prove the Hopper kernels lower or
-# that acceptance is good — both need GPU + the DSpark checkpoint).
+# DeepSeek-V4 DSpark spec decode (vLLM PR #46995, https://github.com/vllm-project/vllm/pull/46995) is
+# now IN the base nightly (merged 2026-07-01) — vendored patch dropped. Serve unchanged:
+# --speculative-config {"method":"dspark","num_speculative_tokens":5} + cudagraphs (no --enforce-eager);
+# needs the DSpark checkpoint deepseek-ai/DeepSeek-V4-Flash-DSpark. Leave draft_sample_method default
+# (probabilistic degrades into loops).
+# Sanity tripwire: a base bump that silently drops DSpark fails HERE (does NOT prove the Hopper kernels
+# lower or that acceptance is good — both need GPU + the checkpoint).
 RUN python3 - <<'PY'
 import vllm
 from vllm.config.speculative import SpeculativeMethod
 assert "dspark" in repr(SpeculativeMethod), repr(SpeculativeMethod)
 import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401  (model-side draft module)
 import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401  (worker-side speculator)
-print("DSpark(#46995) overlay import OK:", vllm.__version__)
+print("DSpark(#46995) native in base OK:", vllm.__version__)
 PY
