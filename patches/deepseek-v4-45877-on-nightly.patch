@@ -1,9 +1,9 @@
 diff --git a/vllm/parser/deepseek_v32.py b/vllm/parser/deepseek_v32.py
 new file mode 100644
-index 000000000..1e9440362
+index 000000000..0d9ac9f53
 --- /dev/null
 +++ b/vllm/parser/deepseek_v32.py
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,131 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +"""DeepSeek V3.2 parser: DSML tool calls with ``function_calls`` wrapper.
@@ -25,7 +25,6 @@ index 000000000..1e9440362
 +from __future__ import annotations
 +
 +import functools
-+import json
 +from typing import TYPE_CHECKING
 +
 +from vllm.parser.deepseek_v4 import (
@@ -34,6 +33,7 @@ index 000000000..1e9440362
 +    DSML_INVOKE_PREFIX,
 +    DSML_PARAM_CLOSE,
 +    _dsml_arg_converter,
++    _unwrap_wrapper_args,
 +)
 +from vllm.parser.engine.events import EventType
 +from vllm.parser.engine.parser_engine import ParserEngine
@@ -42,7 +42,6 @@ index 000000000..1e9440362
 +    ParserState,
 +    Transition,
 +)
-+from vllm.tool_parsers.utils import find_tool_properties
 +
 +if TYPE_CHECKING:
 +    from vllm.tokenizers import TokenizerLike
@@ -132,44 +131,13 @@ index 000000000..1e9440362
 +
 +    def _convert_args(self, raw_args: str, partial: bool) -> str:
 +        result = _dsml_arg_converter(raw_args, partial)
-+        if partial or not self._tools:
++        if not self._tools:
 +            return result
 +        func_name = next((s.name for s in self._tool_slots if s.args == raw_args), None)
-+        return self._unwrap_wrapper_args(result, self._tools, func_name)
-+
-+    @staticmethod
-+    def _unwrap_wrapper_args(
-+        args_json: str,
-+        tools: list[Tool] | None,
-+        func_name: str | None,
-+    ) -> str:
-+        if not tools or not func_name:
-+            return args_json
-+        try:
-+            args = json.loads(args_json)
-+        except (json.JSONDecodeError, ValueError):
-+            return args_json
-+        if not isinstance(args, dict):
-+            return args_json
-+        properties = find_tool_properties(tools, func_name)
-+        if not properties:
-+            return args_json
-+        allowed = set(properties.keys())
-+        for wrapper in ("arguments", "input"):
-+            if set(args.keys()) != {wrapper} or wrapper in allowed:
-+                continue
-+            inner = args[wrapper]
-+            if isinstance(inner, str):
-+                try:
-+                    inner = json.loads(inner)
-+                except json.JSONDecodeError:
-+                    return args_json
-+            if isinstance(inner, dict) and set(inner.keys()).issubset(allowed):
-+                return json.dumps(inner, ensure_ascii=False)
-+        return args_json
++        return _unwrap_wrapper_args(result, self._tools, func_name)
 diff --git a/vllm/parser/deepseek_v4.py b/vllm/parser/deepseek_v4.py
 new file mode 100644
-index 000000000..e14d6b1a9
+index 000000000..c65668708
 --- /dev/null
 +++ b/vllm/parser/deepseek_v4.py
 @@ -0,0 +1,237 @@
@@ -263,6 +231,37 @@ index 000000000..e14d6b1a9
 +                    params[name] = json.loads(value)
 +
 +    return json.dumps(params, ensure_ascii=False)
++
++
++def _unwrap_wrapper_args(
++    args_json: str,
++    tools: list[Tool] | None,
++    func_name: str | None,
++) -> str:
++    if not tools or not func_name:
++        return args_json
++    try:
++        args = json.loads(args_json)
++    except (json.JSONDecodeError, ValueError):
++        return args_json
++    if not isinstance(args, dict):
++        return args_json
++    properties = find_tool_properties(tools, func_name)
++    if not properties:
++        return args_json
++    allowed = set(properties.keys())
++    for wrapper in ("arguments", "input"):
++        if set(args.keys()) != {wrapper} or wrapper in allowed:
++            continue
++        inner = args[wrapper]
++        if isinstance(inner, str):
++            try:
++                inner = json.loads(inner)
++            except json.JSONDecodeError:
++                return args_json
++        if isinstance(inner, dict) and set(inner.keys()).issubset(allowed):
++            return json.dumps(inner, ensure_ascii=False)
++    return args_json
 +
 +
 +@functools.cache
@@ -375,41 +374,24 @@ index 000000000..e14d6b1a9
 +
 +    def _convert_args(self, raw_args: str, partial: bool) -> str:
 +        result = _dsml_arg_converter(raw_args, partial)
-+        if partial or not self._tools:
++        if not self._tools:
 +            return result
 +        func_name = next((s.name for s in self._tool_slots if s.args == raw_args), None)
-+        return self._unwrap_wrapper_args(result, self._tools, func_name)
-+
-+    @staticmethod
-+    def _unwrap_wrapper_args(
-+        args_json: str,
-+        tools: list[Tool] | None,
-+        func_name: str | None,
-+    ) -> str:
-+        if not tools or not func_name:
-+            return args_json
-+        try:
-+            args = json.loads(args_json)
-+        except (json.JSONDecodeError, ValueError):
-+            return args_json
-+        if not isinstance(args, dict):
-+            return args_json
-+        properties = find_tool_properties(tools, func_name)
-+        if not properties:
-+            return args_json
-+        allowed = set(properties.keys())
-+        for wrapper in ("arguments", "input"):
-+            if set(args.keys()) != {wrapper} or wrapper in allowed:
-+                continue
-+            inner = args[wrapper]
-+            if isinstance(inner, str):
-+                try:
-+                    inner = json.loads(inner)
-+                except json.JSONDecodeError:
-+                    return args_json
-+            if isinstance(inner, dict) and set(inner.keys()).issubset(allowed):
-+                return json.dumps(inner, ensure_ascii=False)
-+        return args_json
++        return _unwrap_wrapper_args(result, self._tools, func_name)
+diff --git a/vllm/parser/engine/adapters.py b/vllm/parser/engine/adapters.py
+index 2482dad43..b9c4e42b1 100644
+--- a/vllm/parser/engine/adapters.py
++++ b/vllm/parser/engine/adapters.py
+@@ -111,7 +111,8 @@ class ParserEngineReasoningAdapter(ReasoningParser):
+         return self._parser_engine.reasoning_ended
+ 
+     def finish_streaming(self) -> DeltaMessage | None:
+-        return self._parser_engine.finish_streaming()
++        with self._skip_tool_parsing():
++            return self._parser_engine.finish_streaming()
+ 
+     def get_streaming_fallback_content(
+         self,
 diff --git a/vllm/parser/engine/parser_engine.py b/vllm/parser/engine/parser_engine.py
 index 91d6881ca..6f21cbca7 100644
 --- a/vllm/parser/engine/parser_engine.py
@@ -475,6 +457,56 @@ index fdcbf81ee..889c71504 100644
  (
      MinimaxM2ParserReasoningAdapter,
      MinimaxM2ParserToolAdapter,
+diff --git a/vllm/parser/engine/streaming_parser_engine.py b/vllm/parser/engine/streaming_parser_engine.py
+index ec3c5e5a4..319791961 100644
+--- a/vllm/parser/engine/streaming_parser_engine.py
++++ b/vllm/parser/engine/streaming_parser_engine.py
+@@ -22,14 +22,13 @@ from vllm.parser.engine.parser_engine_config import (
+     Transition,
+ )
+ from vllm.parser.engine.token_id_scanner import (
++    DROP_TERMINAL,
+     LexerInput,
+     PreLexedTerminal,
+     TextChunk,
+     TokenIDScanner,
+ )
+ 
+-DROP_TERMINAL = "__DROP__"
+-
+ 
+ @dataclass(slots=True)
+ class _DropInfo:
+diff --git a/vllm/parser/engine/token_id_scanner.py b/vllm/parser/engine/token_id_scanner.py
+index 635374d82..abcc2e2ba 100644
+--- a/vllm/parser/engine/token_id_scanner.py
++++ b/vllm/parser/engine/token_id_scanner.py
+@@ -8,6 +8,8 @@ from __future__ import annotations
+ from collections.abc import Sequence
+ from dataclasses import dataclass
+ 
++DROP_TERMINAL = "__DROP__"
++
+ 
+ @dataclass(slots=True)
+ class TextChunk:
+@@ -277,7 +279,15 @@ class TokenIDScanner:
+                 consumed = pos + len(anchor.text)
+             else:
+                 has_later_valid = any(p >= 0 for p in positions[i + 1 :])
+-                if not has_later_valid and consumed < len(delta_text):
++                # DROP anchors (EOS, etc.) may have text that never
++                # arrives in delta_text (stripped by detokenizer).
++                # Don't defer remaining content waiting for text
++                # that will never come.
++                if (
++                    not has_later_valid
++                    and consumed < len(delta_text)
++                    and anchor.terminal != DROP_TERMINAL
++                ):
+                     self._deferred_post_text += delta_text[consumed:]
+                     consumed = len(delta_text)
+                 self._deferred_terminals.append(anchor)
 diff --git a/vllm/reasoning/__init__.py b/vllm/reasoning/__init__.py
 index fc74cf2f3..ba5ed4718 100644
 --- a/vllm/reasoning/__init__.py
