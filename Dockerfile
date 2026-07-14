@@ -20,12 +20,9 @@ RUN set -eux; \
     rm -f /tmp/collect_env_route.py; \
     python3 -c "import inspect; import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); assert any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in inspect.signature(m.build_app, follow_wrapped=False).parameters.values()), 'wrapped build_app must stay variadic'; print('collect_env route baked OK')"
 
-# DeepSeek V4 + V3.2 streaming parser engine (reasoning + DSML tool calls) is now IN the base nightly —
-# vLLM PR #45877 (https://github.com/vllm-project/vllm/pull/45877) MERGED 2026-07-04, in every nightly since.
-# Includes the streaming DSML close-tag leak fix we filed (`</｜DSML｜parameter>` registered as a terminal)
-# and EOS handling. Vendored patch DROPPED — serve unchanged: --reasoning-parser deepseek_v4 --tool-call-parser deepseek_v4.
-# Sanity tripwire: a base bump that silently drops or renames the parser fails HERE (does NOT prove
-# streaming correctness — needs GPU).
+# Tripwire: --reasoning-parser/--tool-call-parser deepseek_v4 depend on the base providing these;
+# a bump that drops or renames them fails HERE. DSML_PARAM_CLOSE guards the streaming close-tag
+# leak fix. Does NOT prove streaming correctness — needs GPU.
 RUN python3 - <<'PY'
 from vllm.reasoning import ReasoningParserManager
 from vllm.tool_parsers.abstract_tool_parser import ToolParserManager
@@ -34,16 +31,15 @@ t = ToolParserManager.get_tool_parser("deepseek_v4")
 assert r.__name__ == "DeepSeekV4ParserReasoningAdapter", r
 assert t.__name__ == "DeepSeekV4EngineToolParser", t
 from vllm.parser.deepseek_v4 import deepseek_v4_config, DSML_PARAM_CLOSE
-import vllm.parser.deepseek_v32  # V3.2 sibling ported in the same PR
+import vllm.parser.deepseek_v32  # noqa: F401
 assert deepseek_v4_config(thinking=True).initial_state.name == "REASONING"
 assert deepseek_v4_config(thinking=False).initial_state.name == "CONTENT"
-assert DSML_PARAM_CLOSE == "</｜DSML｜parameter>", DSML_PARAM_CLOSE  # the streaming-leak terminal
-print("deepseek_v4/v32 engine parsers native in base OK:", r.__module__, "/", t.__module__)
+assert DSML_PARAM_CLOSE == "</｜DSML｜parameter>", DSML_PARAM_CLOSE
+print("deepseek_v4/v32 engine parsers OK:", r.__module__, "/", t.__module__)
 PY
 
-# Make the deepseek_v4/v32 tokenizer-mode encoders honor add_generation_prompt +
-# continue_final_message (they otherwise silently ignore both). Rationale + evidence in the PR.
-# Vendored overlay; drop once upstreamed into the base nightly.
+# The deepseek_v4/v32 tokenizer-mode encoders silently ignore add_generation_prompt +
+# continue_final_message without this. Vendored; drop once upstream (vllm#46257) lands in the base.
 COPY patches/deepseek-add-gen-prompt-on-nightly.patch /tmp/dsv4-genprompt.patch
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
@@ -67,18 +63,15 @@ assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
 PY
 
-# DeepSeek-V4 DSpark spec decode (vLLM PR #46995, https://github.com/vllm-project/vllm/pull/46995) is
-# now IN the base nightly (merged 2026-07-01) — vendored patch dropped. Serve unchanged:
-# --speculative-config {"method":"dspark","num_speculative_tokens":5} + cudagraphs (no --enforce-eager);
-# needs the DSpark checkpoint deepseek-ai/DeepSeek-V4-Flash-DSpark. Leave draft_sample_method default
-# (probabilistic degrades into loops).
-# Sanity tripwire: a base bump that silently drops DSpark fails HERE (does NOT prove the Hopper kernels
-# lower or that acceptance is good — both need GPU + the checkpoint).
+# DSpark needs the DSpark checkpoint (deepseek-ai/DeepSeek-V4-Flash-DSpark) + cudagraphs (no
+# --enforce-eager); leave draft_sample_method default — probabilistic degrades into loops.
+# Tripwire: a bump that drops DSpark fails HERE. Does NOT prove the Hopper kernels lower or that
+# acceptance is good — both need GPU + the checkpoint.
 RUN python3 - <<'PY'
 import vllm
 from vllm.config.speculative import SpeculativeMethod
 assert "dspark" in repr(SpeculativeMethod), repr(SpeculativeMethod)
-import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401  (model-side draft module)
-import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401  (worker-side speculator)
-print("DSpark(#46995) native in base OK:", vllm.__version__)
+import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401
+import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
+print("DSpark OK:", vllm.__version__)
 PY
