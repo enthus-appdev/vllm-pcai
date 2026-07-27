@@ -49,12 +49,7 @@ vllm-pcai/
 
 ## Model-specific deployment configs
 
-Operational knowledge — validated serve args, performance figures, and issue history — lives in the companion [`pcai-llm-serving`](https://github.com/enthus-appdev/pcai-llm-serving) repo:
-
-- [Qwen3.6-27B-FP8](https://github.com/enthus-appdev/pcai-llm-serving/blob/main/models/qwen3.6-27b-fp8.md)
-- [Gemma 4 31B](https://github.com/enthus-appdev/pcai-llm-serving/blob/main/models/gemma-4-31b.md)
-- [DeepSeek V4 Flash](https://github.com/enthus-appdev/pcai-llm-serving/blob/main/models/deepseek-v4-flash.md)
-- [Upstream tracking](https://github.com/enthus-appdev/pcai-llm-serving/blob/main/upgrades.md)
+Operational knowledge — validated serve args, performance figures, and issue history — is documented in a separate internal repo.
 
 ## Clone
 
