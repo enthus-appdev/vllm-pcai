@@ -1,19 +1,24 @@
 # vllm-pcai
 
-Custom [vLLM](https://github.com/vllm-project/vllm) image for serving Qwen3.x on **HPE Private Cloud AI (PCAI)**.
+Custom [vLLM](https://github.com/vllm-project/vllm) images for **HPE Private Cloud AI (PCAI)** — used by all production, secondary, and experimental model deployments (Qwen3.6-27B, Gemma 4 31B, DeepSeek V4 Flash).
 
 ## Why this image exists
 
-PCAI cannot mount volumes through its UI, so a custom chat template can't be mounted at runtime — it has to be **baked into the image**.
+PCAI cannot mount volumes through its UI, so anything a model needs at runtime that isn't in the base `vllm/vllm-openai` image **must be baked in**. This image adds four layers on top of the stock vLLM base:
 
-The **stock** vLLM chat templates are already inside `vllm/vllm-openai` at `/vllm-workspace/examples/*.jinja` (vLLM's own Dockerfile does `COPY examples examples`), so this image does **not** re-add them. It only adds the **enhanced Qwen3.5/3.6 templates** from
-[allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image and harden the 27B template (proper `</think>` handling before tool calls, hidden historical reasoning across turns, XML tool-call formatting that avoids premature stop tokens).
+1. **Enhanced chat templates** — Qwen3.5/3.6 hardened templates (hidden historical reasoning, XML tool-call formatting, proper ` response` handling) from [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image. (Gemma 4 uses vLLM's **in-image** template at `/vllm-workspace/examples/tool_chat_template_gemma4.jinja`.)
 
-## Base image: `v0.26.0` — back on a release tag
+2. **Diagnostics endpoint** — `GET /collect_env` on the serving port (same bearer-gate) so PCAI's shell-less pods can still report versions, GPU topology, and env vars.
 
-The `FROM` is the **`v0.26.0` release**. This image rode pinned `cu129` nightlies from June through July because each capability it needs landed after a tag: the streaming **ParserEngine** (vLLM #45413 / #45588 / #45877) so DFlash's large multi-token drafts don't corrupt streaming tool calls in agents; **DFlash** core (#43445) plus **hybrid SWA + full-attention drafters** (#47914); and **DeepSeek-V4 DSpark** (#46995). `v0.26.0` is the first release carrying all of it, so the nightly's trade-off (less battle-tested, unpinnable by Dependabot) is no longer worth paying.
+3. **Vendored parser patches** — a small set of upstream-before-merge patches that remain open upstream. Currently one: the `deepseek_v4` `add_generation_prompt` / `continue_final_message` honor fix ([#46257](https://github.com/vllm-project/vllm/pull/46257)). Previously carried and now merged: `#45877`, `#46995`, `#46875`.
 
-**Bumping is not a date comparison.** vLLM cuts release branches, so a later tag can be *missing* commits present in an earlier nightly — #47914 merged 2026-07-08 yet is absent from `v0.25.0` (tagged 07-11) because it landed after that branch cut. Before any bump, verify the target is a superset of what's deployed:
+4. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
+
+## Base image: `v0.26.0`
+
+The `FROM` is the **`v0.26.0` release**. This image rode pinned `cu129` nightlies from June through July because each capability it needs landed after a tag: the streaming **ParserEngine** (#45413 / #45588 / #45877) so DFlash's large multi-token drafts don't corrupt streaming tool calls in agents; **DFlash** core (#43445) plus **hybrid SWA + full-attention drafters** (#47914); and **DeepSeek-V4 DSpark** (#46995). `v0.26.0` is the first release carrying all of it.
+
+**Bumping is not a date comparison.** vLLM cuts release branches, so a later tag can be *missing* commits present in an earlier nightly — #47914 merged 2026-07-08 yet is absent from `v0.25.0` (tagged 07-11). Before any bump, verify the target is a superset:
 
 ```bash
 gh api repos/vllm-project/vllm/compare/<current-sha-or-tag>...<new-tag> --jq .status   # want: "ahead"
@@ -23,12 +28,16 @@ gh api repos/vllm-project/vllm/compare/<current-sha-or-tag>...<new-tag> --jq .st
 
 ```
 vllm-pcai/
-├── Dockerfile           # FROM vllm/vllm-openai:v0.26.0  +  COPY enhanced templates → /templates/
-├── chat-template-fix/   # git submodule → allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix
-└── .dockerignore        # keeps only the enhanced .jinja in the build context
+├── Dockerfile                # FROM vllm/vllm-openai:v0.26.0
+│                               + Qwen enhanced templates
+│                               + /collect_env diagnostics route
+│                               + DeepSeek V4 parser patches
+│                               + Build-time tripwires for all three models
+├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
+├── diag/                     # collect_env_route.py
+├── patches/                  # deepseek-add-gen-prompt-on-nightly.patch (#46257)
+└── .dockerignore
 ```
-
-No vLLM submodule — we build *from* vLLM, so its code and stock templates are already present.
 
 ## Templates available at runtime
 
@@ -36,13 +45,16 @@ No vLLM submodule — we build *from* vLLM, so its code and stock templates are 
 |------|--------|
 | `/templates/qwen3.6-enhanced.jinja` | this image (allanchan339 fix) |
 | `/templates/qwen3.5-enhanced.jinja` | this image (allanchan339 fix) |
-| `/vllm-workspace/examples/*.jinja` | stock vLLM templates, already in the base image |
+| `/vllm-workspace/examples/*.jinja` | stock vLLM templates (incl. Gemma 4) |
 
-## Clone (submodule must be initialised)
+## Model-specific deployment configs
+
+Operational knowledge — validated serve args, performance figures, and issue history — is documented in a separate internal repo.
+
+## Clone
 
 ```bash
 git clone --recurse-submodules https://github.com/enthus-appdev/vllm-pcai.git
-# or: git submodule update --init
 ```
 
 ## Build & push
@@ -55,23 +67,7 @@ docker build -t ghcr.io/enthus-appdev/vllm-pcai:latest .
 docker push ghcr.io/enthus-appdev/vllm-pcai:latest
 ```
 
-## Use on PCAI
-
-Point the deployment at this image and select a baked-in template:
-
-```
-Qwen/Qwen3.6-27B-FP8 --served-model-name Qwen3.6-27B --tensor-parallel-size 1 \
-  --max-model-len 262144 --kv-cache-dtype fp8 \
-  --mamba-ssm-cache-dtype float16 --mamba-cache-dtype float16 \
-  --enable-auto-tool-choice --reasoning-parser qwen3 \
-  --chat-template /templates/qwen3.6-enhanced.jinja \
-  --port 8080
-```
-
-> The enhanced template uses XML-style tool calls — match the tool-call parser to it per the
-> [fix repo's docs](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix) rather than assuming `qwen3_coder`.
-
-## Update the fix
+## Update the templates
 
 ```bash
 cd chat-template-fix && git fetch && git checkout <commit-or-tag> && cd ..
@@ -80,6 +76,4 @@ git commit -am "chore: bump chat-template-fix"
 
 ## License
 
-Repo files: Apache-2.0. The enhanced templates are from
-[allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix)
-via submodule and retain their upstream license.
+Repo files: Apache-2.0. The enhanced templates retain their upstream license.
