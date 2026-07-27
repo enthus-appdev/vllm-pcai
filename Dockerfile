@@ -64,6 +64,35 @@ assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
 PY
 
+# Without this, a reply that never emits </think> leaves the EOS token in reasoning_content
+# (generation ends in the parser's REASONING state). vllm#48748 merged 2026-07-22 but landed
+# AFTER the v0.26.0 branch cut, so the release tag does not have it. Drop at v0.27.0 — the
+# apply below will fail loudly once the base carries it.
+COPY patches/48748-eos-reasoning-leak-on-v0.26.0.patch /tmp/dsv4-eos.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-eos.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dsv4-eos.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dsv4-eos.patch
+
+# Tripwire asserts BOTH directions: the symbols must still exist (so an upstream rename fails
+# here instead of passing vacuously), and the DROP_TERMINAL branch must no longer gate on
+# skip_tool_parsing. Source-level, not behavioral — driving the parser needs vLLM's test
+# fixtures (MockTokenizer et al), which are not in the runtime image.
+RUN python3 - <<'PY'
+import inspect, re
+from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
+cls_src = inspect.getsource(StreamingParserEngine)
+fn_src = inspect.getsource(StreamingParserEngine._on_terminal)
+assert "skip_tool_parsing" in cls_src, "symbol gone — re-check whether vllm#48748 still applies"
+assert "DROP_TERMINAL" in fn_src, fn_src
+branch = re.search(r"if[^:]*DROP_TERMINAL[^:]*:", fn_src, re.S)
+assert branch, fn_src
+assert "skip_tool_parsing" not in branch.group(0), branch.group(0)
+print("EOS-in-reasoning fix (vllm#48748) applied OK")
+PY
+
 # Qwen's DFlash drafter mixes sliding + full attention, which only the V2 model runner can do
 # (multiple KV groups). vLLM auto-forces V2 for it via this helper, which is why no serve-arg or
 # env change is needed; a base that loses it would leave V1 selected and fail at boot instead.
