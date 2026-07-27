@@ -1,0 +1,20 @@
+diff --git a/vllm/parser/engine/streaming_parser_engine.py b/vllm/parser/engine/streaming_parser_engine.py
+index 8cafdf8e625b..b459b75b34a4 100644
+--- a/vllm/parser/engine/streaming_parser_engine.py
++++ b/vllm/parser/engine/streaming_parser_engine.py
+@@ -304,14 +304,7 @@ def _on_terminal(self, terminal: str, value: str) -> list[SemanticEvent]:
+         transition = self.config.transitions.get(key)
+ 
+         if transition is None:
+-            if (
+-                self._has_drops
+-                and terminal == DROP_TERMINAL
+-                # Preserve drop tokens when skip_tool_parsing is active so
+-                # the reasoning pass doesn't silently remove tokens that a
+-                # later tool-call pass might need to see.
+-                and not self.skip_tool_parsing
+-            ):
++            if self._has_drops and terminal == DROP_TERMINAL:
+                 return []
+             return self._emit_for_state(value)
+ 

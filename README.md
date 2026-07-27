@@ -10,7 +10,7 @@ PCAI cannot mount volumes through its UI, so anything a model needs at runtime t
 
 2. **Diagnostics endpoint** — `GET /collect_env` on the serving port (same bearer-gate) so PCAI's shell-less pods can still report versions, GPU topology, and env vars.
 
-3. **Vendored parser patches** — a small set of upstream-before-merge patches that remain open upstream. Currently one: the `deepseek_v4` `add_generation_prompt` / `continue_final_message` honor fix ([#46257](https://github.com/vllm-project/vllm/pull/46257)). Previously carried and now merged: `#45877`, `#46995`, `#46875`.
+3. **Vendored parser patches** — upstream fixes the base image does not carry yet. Currently two: the `deepseek_v4` `add_generation_prompt` / `continue_final_message` honor fix ([#46257](https://github.com/vllm-project/vllm/pull/46257), still open upstream), and the EOS-in-`reasoning_content` leak fix ([#48748](https://github.com/vllm-project/vllm/pull/48748) — **merged**, but after the `v0.26.0` branch cut, so the release tag lacks it; drop at v0.27.0). Previously carried and now merged: `#45877`, `#46995`, `#46875`.
 
 4. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
 
