@@ -9,15 +9,21 @@ PCAI cannot mount volumes through its UI, so a custom chat template can't be mou
 The **stock** vLLM chat templates are already inside `vllm/vllm-openai` at `/vllm-workspace/examples/*.jinja` (vLLM's own Dockerfile does `COPY examples examples`), so this image does **not** re-add them. It only adds the **enhanced Qwen3.5/3.6 templates** from
 [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image and harden the 27B template (proper `</think>` handling before tool calls, hidden historical reasoning across turns, XML tool-call formatting that avoids premature stop tokens).
 
-## Base image: a pinned nightly, not a release
+## Base image: `v0.26.0` — back on a release tag
 
-The `FROM` is a **cu129 nightly** (`cu129-nightly-6607a80d…`), not `v0.23.0`, on purpose: it carries the streaming **ParserEngine** (vLLM #45413 + #45588) so **DFlash's large multi-token drafts don't corrupt streaming tool calls** in opencode — the v0.23.0 release ships only the legacy parser. The nightly is ahead of the v0.23.0 tag and still has DFlash core (#43445) + `qwen3_dflash`. Pinned by commit and bumped deliberately (Dependabot won't auto-track a nightly SHA tag). Trade-off: a nightly is less battle-tested than a release — bump with intent.
+The `FROM` is the **`v0.26.0` release**. This image rode pinned `cu129` nightlies from June through July because each capability it needs landed after a tag: the streaming **ParserEngine** (vLLM #45413 / #45588 / #45877) so DFlash's large multi-token drafts don't corrupt streaming tool calls in agents; **DFlash** core (#43445) plus **hybrid SWA + full-attention drafters** (#47914); and **DeepSeek-V4 DSpark** (#46995). `v0.26.0` is the first release carrying all of it, so the nightly's trade-off (less battle-tested, unpinnable by Dependabot) is no longer worth paying.
+
+**Bumping is not a date comparison.** vLLM cuts release branches, so a later tag can be *missing* commits present in an earlier nightly — #47914 merged 2026-07-08 yet is absent from `v0.25.0` (tagged 07-11) because it landed after that branch cut. Before any bump, verify the target is a superset of what's deployed:
+
+```bash
+gh api repos/vllm-project/vllm/compare/<current-sha-or-tag>...<new-tag> --jq .status   # want: "ahead"
+```
 
 ## Layout
 
 ```
 vllm-pcai/
-├── Dockerfile           # FROM vllm/vllm-openai:cu129-nightly-6607a80d…  +  COPY enhanced templates → /templates/
+├── Dockerfile           # FROM vllm/vllm-openai:v0.26.0  +  COPY enhanced templates → /templates/
 ├── chat-template-fix/   # git submodule → allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix
 └── .dockerignore        # keeps only the enhanced .jinja in the build context
 ```

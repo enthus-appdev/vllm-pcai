@@ -1,10 +1,11 @@
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
-# Base is a cu129 NIGHTLY, not a release: needed for the engine streaming parsers (qwen3/gemma4
-# tool-calling + gemma4 reasoning channels), DFlash, and the DeepSeek-V4 DSpark prereqs (warmup
-# modules + sparse_swa), none of which are in v0.23.0. Pinned by commit; bump deliberately
-# (Dependabot won't track a nightly SHA tag).
-FROM vllm/vllm-openai:cu129-nightly-9e57de7197f234f9d9187715d96e07e007048c0f
+# v0.26.0 is the first RELEASE carrying everything we previously needed nightlies for: the engine
+# streaming parsers (qwen3/gemma4/deepseek_v4), DFlash incl. hybrid SWA+full drafters (vllm#47914 —
+# z-lab/Qwen3.6-27B-DFlash is 4-of-5 sliding, so this is required, not optional), and DeepSeek-V4
+# DSpark. Before bumping, verify the target tag is a superset of this one — vLLM cuts release
+# branches, so a later tag can MISS commits present here (compare/<sha>...<tag> must say "ahead").
+FROM vllm/vllm-openai:v0.26.0
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -61,6 +62,21 @@ assert encode_messages(a, thinking_mode="chat", add_generation_prompt=True).ends
 c = encode_messages(a, thinking_mode="chat", continue_final_message=True)
 assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
+PY
+
+# Qwen's DFlash drafter mixes sliding + full attention, which only the V2 model runner can do
+# (multiple KV groups). vLLM auto-forces V2 for it via this helper, which is why no serve-arg or
+# env change is needed; a base that loses it would leave V1 selected and fail at boot instead.
+# Tripwire: does NOT prove acceptance — a mis-wired drafter still serves CORRECT text, just slower
+# than no speculation at all. Verify on Grafana acceptance (~28-30%), not on output looking fine.
+RUN python3 - <<'PY'
+from vllm.config.vllm import VllmConfig
+from vllm.config.speculative import SpeculativeConfig
+assert hasattr(VllmConfig, "_dflash_needs_multi_kv_group")
+# #48787: lets the target run fp8 KV while the drafter stays BF16 (untested here, see docs).
+assert "kv_cache_dtype" in SpeculativeConfig.__annotations__, SpeculativeConfig.__annotations__
+import vllm.model_executor.models.qwen3_dflash  # noqa: F401
+print("hybrid-SWA DFlash prereqs OK")
 PY
 
 # DSpark needs the DSpark checkpoint (deepseek-ai/DeepSeek-V4-Flash-DSpark) + cudagraphs (no
