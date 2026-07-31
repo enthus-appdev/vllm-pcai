@@ -164,3 +164,38 @@ assert build("", CACHE) == S3, "shared-checkpoint drafter did not inherit model_
 assert build("s3://other/drafter/", CACHE) == "s3://other/drafter/", "clobbered a drafter's own weights"
 print("spec-draft model_weights inheritance OK")
 PY
+
+# PCAI fixes /dev/shm at 64 MiB and exposes no way to change it (that needs an emptyDir volume,
+# which PCAI forbids). vllm#48879 added check_shm_free_space, which now refuses to over-commit —
+# correct, but fatal here: MessageQueue's rpc_broadcast_mq honours VLLM_MQ_MAX_CHUNK_BYTES_MB while
+# worker_response_mq (created once PER WORKER) hardcodes the 24 MiB default, so TP=2 needs
+# 2 x 240 MiB no matter what the env var says. Not filed upstream yet; the env var plainly intends
+# to bound shm usage, so one call site ignoring it is a bug.
+COPY patches/mq-worker-response-honour-chunk-bytes.patch /tmp/mq-chunk.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/mq-chunk.patch; \
+    else patch -p1 -d "$SITE" < /tmp/mq-chunk.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/mq-chunk.patch
+
+# 1 MiB x 10 chunks: rpc 10 MiB + one 10 MiB response queue per worker = 30 MiB at TP=2, inside the
+# 64 MiB PCAI allows. The 24 MiB default exists for grammar bitmasks at 1024 requests; we serve
+# max-num-seqs 4 (~32 KiB), and an oversized message degrades to a local socket rather than failing.
+# Override per-deployment if a model ever needs bigger messages AND has the shm for them.
+ENV VLLM_MQ_MAX_CHUNK_BYTES_MB=1
+
+# Tripwire: both queue call sites must honour the env var, or a small-/dev/shm host dies at boot
+# after the (very long) weight load. Source-level — constructing a real MessageQueue needs shm.
+RUN python3 - <<'PY'
+import inspect, re
+from vllm.v1.executor import multiproc_executor as m
+src = inspect.getsource(m)
+sites = re.findall(r"MessageQueue\((?!\s*\)).*?\)", src, re.S)
+assert sites, "no MessageQueue(...) construction found — upstream refactor, re-check the patch"
+bare = [s for s in sites if "max_chunk_bytes" not in s]
+assert not bare, f"MessageQueue built without max_chunk_bytes: {bare}"
+import vllm.envs as envs
+assert envs.VLLM_MQ_MAX_CHUNK_BYTES_MB == 1, envs.VLLM_MQ_MAX_CHUNK_BYTES_MB
+print("all MessageQueue sites honour VLLM_MQ_MAX_CHUNK_BYTES_MB OK")
+PY
