@@ -207,3 +207,22 @@ import vllm.envs as envs
 assert envs.VLLM_MQ_MAX_CHUNK_BYTES_MB == 1, envs.VLLM_MQ_MAX_CHUNK_BYTES_MB
 print("all MessageQueue sites honour VLLM_MQ_MAX_CHUNK_BYTES_MB OK")
 PY
+
+# Guards the vllm#50298 regression the base is pinned below (see FROM). That PR asserts
+# `topk_indices_buffer is not None` inside forward_mqa's `attn_metadata is None` warmup branch;
+# the DSpark drafter has no indexer buffer, so it dies in profile_run AFTER the ~32 min weight
+# load. Source-level: reaching that branch needs a GPU. Fails here instead, in ~4 min.
+RUN python3 - <<'PY'
+import inspect
+from vllm.models.deepseek_v4.nvidia import flashmla
+src = inspect.getsource(flashmla)
+marker = "if attn_metadata is None:"
+assert marker in src, "warmup branch gone — re-read forward_mqa before trusting this pin"
+warmup = src[src.index(marker):].split("\n")[:35]
+bad = [l for l in warmup if "assert" in l and "topk_indices_buffer" in l]
+assert not bad, (
+    "vllm#50298 (or equivalent) is in this base: the warmup branch asserts on "
+    f"topk_indices_buffer, which a DSpark drafter never has -> {bad}"
+)
+print("flashmla warmup branch is DSpark-safe OK")
+PY
