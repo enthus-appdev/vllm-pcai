@@ -69,7 +69,7 @@ jobs:
 
       - name: Login to GitHub Container Registry
         if: steps.dockerfile.outputs.exists == 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@v4.5.2
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
