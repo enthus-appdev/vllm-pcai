@@ -120,3 +120,48 @@ import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401
 import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
 print("DSpark OK:", vllm.__version__)
 PY
+
+# With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
+# config-only cache dir (json/py/model, never safetensors) and keeps the URL in `model_weights`.
+# Drafters that live INSIDE the target checkpoint (DSpark, MTP) are built from the rewritten path
+# and inherit an empty `model_weights`, so the drafter load dies with "Cannot find any safetensors
+# model weights" AFTER the ~16 min target stream. Upstream vllm#48023 (fixes vllm#42060); vendored
+# because it is still open. Drop once the base carries it — the apply below will fail loudly.
+COPY patches/48023-spec-draft-inherit-model-weights-on-v0.26.0.patch /tmp/spec-draft-weights.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/spec-draft-weights.patch; \
+    else patch -p1 -d "$SITE" < /tmp/spec-draft-weights.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/spec-draft-weights.patch
+
+# Build-time tripwire: behavioral (pure config, no GPU/network). Asserts BOTH directions — a shared
+# checkpoint inherits the object-storage URL, and a drafter that resolved its own is not clobbered.
+RUN python3 - <<'PY'
+from unittest.mock import MagicMock, patch
+from vllm.config import ParallelConfig
+from vllm.config.speculative import SpeculativeConfig
+
+S3, CACHE = "s3://llm-model-cache-std-01/DeepSeek-V4-Flash-0731/", "/root/.cache/vllm/assets/model_streamer/abcd1234"
+
+def build(draft_weights, draft_model):
+    with patch("vllm.config.speculative.ModelConfig") as mc:
+        d = MagicMock(); d.model = draft_model; d.model_weights = draft_weights
+        d.hf_config.model_type = "deepseek_mtp"; d.hf_config.n_predict = None; d.max_model_len = 4096
+        mc.return_value = d
+        t = MagicMock(); t.model = CACHE; t.model_weights = S3
+        t.hf_text_config.model_type = "deepseek_v3"; t.quantization = None; t.max_model_len = 4096
+        try:
+            SpeculativeConfig(method="mtp", num_speculative_tokens=1,
+                              target_model_config=t, target_parallel_config=ParallelConfig())
+        except Exception as e:
+            # These mocks track SpeculativeConfig.__post_init__; a base bump can require more
+            # attributes. That is a stale-tripwire failure, NOT evidence the patch is unneeded.
+            raise SystemExit(f"tripwire mocks no longer match this base ({type(e).__name__}: {e})"
+                             " — update the mocks, do NOT drop the patch") from e
+        return d.model_weights
+
+assert build("", CACHE) == S3, "shared-checkpoint drafter did not inherit model_weights"
+assert build("s3://other/drafter/", CACHE) == "s3://other/drafter/", "clobbered a drafter's own weights"
+print("spec-draft model_weights inheritance OK")
+PY
