@@ -14,9 +14,9 @@ PCAI cannot mount volumes through its UI, so anything a model needs at runtime t
 
 4. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
 
-## Base image: `nightly-0f173945`
+## Base image: `nightly-6f91edf9`
 
-The `FROM` is a pinned **nightly**, back off the `v0.26.0` release it briefly reached. The DeepSeek-V4 KV-capacity work all landed after the `v0.26.0` branch cut: [#48993](https://github.com/vllm-project/vllm/pull/48993) (packed KV group overlays — per-block cost drops from `sum(groups)` to `max(groups)`) and [#48317](https://github.com/vllm-project/vllm/pull/48317) (a correctness fix to `get_max_concurrency_for_kv_cache_config`, which counted only one group's page size and therefore overstated every concurrency figure). Riding along: #50312, #50298, #48957, #49486, #50004. `v0.26.1rc0` carries the first two but is a git tag only — no image is published.
+The `FROM` is a pinned **nightly**, back off the `v0.26.0` release it briefly reached. The DeepSeek-V4 KV-capacity work all landed after the `v0.26.0` branch cut: [#48993](https://github.com/vllm-project/vllm/pull/48993) (packed KV group overlays — per-block cost drops from `sum(groups)` to `max(groups)`) and [#48317](https://github.com/vllm-project/vllm/pull/48317) (a correctness fix to `get_max_concurrency_for_kv_cache_config`, which counted only one group's page size and therefore overstated every concurrency figure). Riding along: #48957, #49486, #50004 (&#35;50298/&#35;50312 deliberately excluded — see Dockerfile). `v0.26.1rc0` carries the first two but is a git tag only — no image is published.
 
 **Nightly tags are pruned after roughly two weeks.** If a rebuild fails on an unresolvable `FROM`, that is the cause; move to the first *release* tag that is a superset rather than silently picking a newer nightly.
 
@@ -30,7 +30,7 @@ gh api repos/vllm-project/vllm/compare/<current-sha-or-tag>...<new-tag> --jq .st
 
 ```
 vllm-pcai/
-├── Dockerfile                # FROM vllm/vllm-openai:nightly-0f173945
+├── Dockerfile                # FROM vllm/vllm-openai:nightly-6f91edf9
 │                               + Qwen enhanced templates
 │                               + /collect_env diagnostics route
 │                               + DeepSeek V4 parser patches
