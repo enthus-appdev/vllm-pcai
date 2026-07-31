@@ -1,0 +1,19 @@
+--- a/vllm/v1/executor/multiproc_executor.py
++++ b/vllm/v1/executor/multiproc_executor.py
+@@ -581,8 +581,14 @@
+                 input_shm_handle, self.worker.rank
+             )
+ 
+-            # Initializes a message queue for sending the model output
+-            self.worker_response_mq = MessageQueue(1, 1)
++            # Initializes a message queue for sending the model output.
++            # Honour VLLM_MQ_MAX_CHUNK_BYTES_MB here too: this queue is created
++            # once PER WORKER, so on a host with a small /dev/shm the default
++            # (24 MiB x 10 chunks = 240 MiB each) dominates total shm usage and
++            # check_shm_free_space fails even when the broadcast queue was capped.
++            self.worker_response_mq = MessageQueue(
++                1, 1, max_chunk_bytes=envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024
++            )
+             self.peer_response_handles = []
+         else:
+             # Initialize remote MessageQueue for receiving SchedulerOutput across nodes
