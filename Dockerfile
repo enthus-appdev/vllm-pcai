@@ -1,11 +1,19 @@
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
-# v0.26.0 is the first RELEASE carrying everything we previously needed nightlies for: the engine
-# streaming parsers (qwen3/gemma4/deepseek_v4), DFlash incl. hybrid SWA+full drafters (vllm#47914 —
-# z-lab/Qwen3.6-27B-DFlash is 4-of-5 sliding, so this is required, not optional), and DeepSeek-V4
-# DSpark. Before bumping, verify the target tag is a superset of this one — vLLM cuts release
-# branches, so a later tag can MISS commits present here (compare/<sha>...<tag> must say "ahead").
-FROM vllm/vllm-openai:v0.26.0
+# Back on a nightly, reluctantly: the DSV4 KV-capacity work all landed after the v0.26.0 branch cut.
+# vllm#48993 (packed KV group overlays: per-block cost sum(groups) -> max(groups)) and vllm#48317
+# (get_max_concurrency_for_kv_cache_config counted only ONE group's page size, so every concurrency
+# figure we ever recorded was overstated) are the reasons; #50312/#50298/#48957/#49486/#50004 ride
+# along. v0.26.1rc0 has the first two but is a git tag only — no image is published.
+#
+# ⚠ Nightly tags are pruned (~2 weeks). If a rebuild fails on an unresolvable FROM, that is why —
+# move to the first release tag that is a superset, do not silently pick a newer nightly.
+#
+# Bumping is not a date comparison: vLLM cuts release branches, so a later tag can MISS commits.
+# `gh api repos/vllm-project/vllm/compare/<current>...<target> --jq .status` should say "ahead".
+# If it says "diverged", check whether the behind-by commits are backports that exist on main under
+# different SHAs (they usually are) before treating it as a blocker.
+FROM vllm/vllm-openai:nightly-0f17394564fa2fccd332cf63321314884c15ee37
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -64,22 +72,11 @@ assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
 PY
 
-# Without this, a reply that never emits </think> leaves the EOS token in reasoning_content
-# (generation ends in the parser's REASONING state). vllm#48748 merged 2026-07-22 but landed
-# AFTER the v0.26.0 branch cut, so the release tag does not have it. Drop at v0.27.0 — the
-# apply below will fail loudly once the base carries it.
-COPY patches/48748-eos-reasoning-leak-on-v0.26.0.patch /tmp/dsv4-eos.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-eos.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dsv4-eos.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/dsv4-eos.patch
-
-# Tripwire asserts BOTH directions: the symbols must still exist (so an upstream rename fails
-# here instead of passing vacuously), and the DROP_TERMINAL branch must no longer gate on
-# skip_tool_parsing. Source-level, not behavioral — driving the parser needs vLLM's test
-# fixtures (MockTokenizer et al), which are not in the runtime image.
+# vllm#48748 (a reply that never emits </think> leaves the EOS token in reasoning_content) is IN
+# THIS BASE, so the vendored patch is gone. The tripwire stays as a regression check on the base:
+# the symbols must still exist (so an upstream rename fails here instead of passing vacuously) and
+# the DROP_TERMINAL branch must not gate on skip_tool_parsing. Source-level, not behavioral —
+# driving the parser needs vLLM's test fixtures (MockTokenizer et al), absent from the runtime image.
 RUN python3 - <<'PY'
 import inspect, re
 from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
@@ -90,7 +87,7 @@ assert "DROP_TERMINAL" in fn_src, fn_src
 branch = re.search(r"if[^:]*DROP_TERMINAL[^:]*:", fn_src, re.S)
 assert branch, fn_src
 assert "skip_tool_parsing" not in branch.group(0), branch.group(0)
-print("EOS-in-reasoning fix (vllm#48748) applied OK")
+print("EOS-in-reasoning fix (vllm#48748) present in base OK")
 PY
 
 # Qwen's DFlash drafter mixes sliding + full attention, which only the V2 model runner can do
@@ -108,8 +105,10 @@ import vllm.model_executor.models.qwen3_dflash  # noqa: F401
 print("hybrid-SWA DFlash prereqs OK")
 PY
 
-# DSpark needs the DSpark checkpoint (deepseek-ai/DeepSeek-V4-Flash-DSpark) + cudagraphs (no
-# --enforce-eager); leave draft_sample_method default — probabilistic degrades into loops.
+# DSpark needs a checkpoint that ships the drafter (deepseek-ai/DeepSeek-V4-Flash-0731; the separate
+# -DSpark repo it replaced is retired) + cudagraphs (no --enforce-eager). num_speculative_tokens must
+# be >= config.json's dspark_block_size (5) — below it the block drafter emits GARBLED text, not just
+# lower acceptance. Leave draft_sample_method default — probabilistic degrades into loops.
 # Tripwire: a bump that drops DSpark fails HERE. Does NOT prove the Hopper kernels lower or that
 # acceptance is good — both need GPU + the checkpoint.
 RUN python3 - <<'PY'
@@ -127,7 +126,7 @@ PY
 # and inherit an empty `model_weights`, so the drafter load dies with "Cannot find any safetensors
 # model weights" AFTER the ~16 min target stream. Upstream vllm#48023 (fixes vllm#42060); vendored
 # because it is still open. Drop once the base carries it — the apply below will fail loudly.
-COPY patches/48023-spec-draft-inherit-model-weights-on-v0.26.0.patch /tmp/spec-draft-weights.patch
+COPY patches/48023-spec-draft-inherit-model-weights.patch /tmp/spec-draft-weights.patch
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/spec-draft-weights.patch; \
