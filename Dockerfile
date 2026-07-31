@@ -3,8 +3,16 @@
 # Back on a nightly, reluctantly: the DSV4 KV-capacity work all landed after the v0.26.0 branch cut.
 # vllm#48993 (packed KV group overlays: per-block cost sum(groups) -> max(groups)) and vllm#48317
 # (get_max_concurrency_for_kv_cache_config counted only ONE group's page size, so every concurrency
-# figure we ever recorded was overstated) are the reasons; #50312/#50298/#48957/#49486/#50004 ride
-# along. v0.26.1rc0 has the first two but is a git tag only — no image is published.
+# figure we ever recorded was overstated) are the reasons; #48957/#49486/#50004 ride along.
+# v0.26.1rc0 has the first two but is a git tag only — no image is published.
+#
+# ⚠ Pinned to the 07-29 nightly ON PURPOSE, not the newest. vllm#50298 (merged 07-30) added an
+# early-return warmup branch to models/deepseek_v4/nvidia/flashmla.py that asserts
+# `self.topk_indices_buffer is not None`. A DSpark drafter has no indexer buffer, so profile_run
+# dies with a bare AssertionError AFTER the full ~32 min weight load. Verified: the assert is
+# absent here and in v0.26.0, and #50298 is the only commit touching that file in between.
+# Cost of stopping short: #50298 (~1.88x kernel) and #50312 (448 MiB) — both landed 07-30 with
+# the bug. Re-test them once it is fixed upstream.
 #
 # ⚠ Nightly tags are pruned (~2 weeks). If a rebuild fails on an unresolvable FROM, that is why —
 # move to the first release tag that is a superset, do not silently pick a newer nightly.
@@ -13,7 +21,7 @@
 # `gh api repos/vllm-project/vllm/compare/<current>...<target> --jq .status` should say "ahead".
 # If it says "diverged", check whether the behind-by commits are backports that exist on main under
 # different SHAs (they usually are) before treating it as a blocker.
-FROM vllm/vllm-openai:nightly-0f17394564fa2fccd332cf63321314884c15ee37
+FROM vllm/vllm-openai:nightly-6f91edf96d3f3272945809c04702380053bff4de
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
