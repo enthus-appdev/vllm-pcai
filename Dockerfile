@@ -6,13 +6,14 @@
 # figure we ever recorded was overstated) are the reasons; #48957/#49486/#50004 ride along.
 # v0.26.1rc0 has the first two but is a git tag only — no image is published.
 #
-# ⚠ Pinned to the 07-29 nightly ON PURPOSE, not the newest. vllm#50298 (merged 07-30) added an
-# early-return warmup branch to models/deepseek_v4/nvidia/flashmla.py that asserts
-# `self.topk_indices_buffer is not None`. A DSpark drafter has no indexer buffer, so profile_run
-# dies with a bare AssertionError AFTER the full ~32 min weight load. Verified: the assert is
-# absent here and in v0.26.0, and #50298 is the only commit touching that file in between.
-# Cost of stopping short: #50298 (~1.88x kernel) and #50312 (448 MiB) — both landed 07-30 with
-# the bug. Re-test them once it is fixed upstream.
+# vllm#50298 (~1.88x kernel) shipped an early-return warmup branch in
+# models/deepseek_v4/nvidia/flashmla.py asserting `self.topk_indices_buffer is not None`. A DSpark
+# drafter has no indexer buffer, so profile_run died with a bare AssertionError AFTER the full
+# ~32 min weight load (vllm#50615). We pinned below it until vllm#50693 fixed it; that patch is now
+# vendored, so the pin is lifted and #50298/#50312/#49236/#48047 ride along.
+# The fix only helps because our draft layers are SWA-only: compress_ratios has 46 entries for 43
+# hidden layers and the trailing three (the MTP/DSpark layers) are 0, so `swa_only` is True and the
+# assert is never reached. A checkpoint whose draft layers compress would still trip it.
 #
 # ⚠ Nightly tags are pruned (~2 weeks). If a rebuild fails on an unresolvable FROM, that is why —
 # move to the first release tag that is a superset, do not silently pick a newer nightly.
@@ -21,7 +22,7 @@
 # `gh api repos/vllm-project/vllm/compare/<current>...<target> --jq .status` should say "ahead".
 # If it says "diverged", check whether the behind-by commits are backports that exist on main under
 # different SHAs (they usually are) before treating it as a blocker.
-FROM vllm/vllm-openai:nightly-6f91edf96d3f3272945809c04702380053bff4de
+FROM vllm/vllm-openai:nightly-124154a8843d1f8e4d4e2d5d466e2d3ebc3716da
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -208,21 +209,32 @@ assert envs.VLLM_MQ_MAX_CHUNK_BYTES_MB == 1, envs.VLLM_MQ_MAX_CHUNK_BYTES_MB
 print("all MessageQueue sites honour VLLM_MQ_MAX_CHUNK_BYTES_MB OK")
 PY
 
-# Guards the vllm#50298 regression the base is pinned below (see FROM). That PR asserts
-# `topk_indices_buffer is not None` inside forward_mqa's `attn_metadata is None` warmup branch;
-# the DSpark drafter has no indexer buffer, so it dies in profile_run AFTER the ~32 min weight
-# load. Source-level: reaching that branch needs a GPU. Fails here instead, in ~4 min.
+# vllm#50298's warmup branch asserts on topk_indices_buffer, which a DSpark drafter never has ->
+# AssertionError in profile_run AFTER the ~32 min weight load (vllm#50615). vllm#50693 makes the
+# assert conditional so the SWA-only path returns top_k = 0 without it. The assert is now EXPECTED
+# to be present — what must hold is that it sits behind the swa_only guard, not in front of it.
+# Source-level: reaching that branch needs a GPU. Fails here instead, in ~4 min.
+COPY patches/50693-dspark-warmup-swa-only.patch /tmp/dsv4-warmup.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-warmup.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dsv4-warmup.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dsv4-warmup.patch
+
 RUN python3 - <<'PY'
 import inspect
 from vllm.models.deepseek_v4.nvidia import flashmla
 src = inspect.getsource(flashmla)
 marker = "if attn_metadata is None:"
-assert marker in src, "warmup branch gone — re-read forward_mqa before trusting this pin"
-warmup = src[src.index(marker):].split("\n")[:35]
-bad = [l for l in warmup if "assert" in l and "topk_indices_buffer" in l]
-assert not bad, (
-    "vllm#50298 (or equivalent) is in this base: the warmup branch asserts on "
-    f"topk_indices_buffer, which a DSpark drafter never has -> {bad}"
+assert marker in src, "warmup branch gone — re-read forward_mqa before trusting this patch"
+warmup = "\n".join(src[src.index(marker):].split("\n")[:35])
+guard = warmup.find("if swa_only:")
+assert guard != -1, "swa_only guard missing from the warmup branch -> vllm#50693 not applied"
+first_assert = warmup.find("assert self.topk_indices_buffer is not None")
+assert first_assert == -1 or first_assert > guard, (
+    "warmup branch asserts on topk_indices_buffer BEFORE the swa_only guard: a DSpark drafter "
+    "would die in profile_run after the full weight load (vllm#50615)"
 )
 print("flashmla warmup branch is DSpark-safe OK")
 PY
