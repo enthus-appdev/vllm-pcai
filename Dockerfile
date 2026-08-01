@@ -226,3 +226,43 @@ assert not bad, (
 )
 print("flashmla warmup branch is DSpark-safe OK")
 PY
+
+# Clients that replay one assistant turn as two consecutive assistant messages (a content-only
+# preamble, then a tool_calls + reasoning message) get a malformed prompt: the encoder emits the
+# Assistant transition only after user/developer messages, so the second message is glued on with a
+# stray <｜end▁of▁sentence｜> mid-turn and its reasoning renders as free text closed by an orphan
+# </think>. The model imitates the unbalanced markup and emits stray </｜DSML｜tool_calls> or drops a
+# quote inside a tool-call header, which the parser then reads as a garbage tool name.
+COPY patches/50686-merge-consecutive-assistant-messages.patch /tmp/dsv4-consec.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-consec.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dsv4-consec.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dsv4-consec.patch
+
+# Tripwire: functional, not source-level — the encoder is dependency-free, so we can render a split
+# turn and assert the prompt is well-formed. Catches both a dropped patch and an upstream rewrite
+# that reintroduces the bug.
+RUN python3 - <<'PY'
+from vllm.tokenizers import deepseek_v4_encoding as enc
+
+msgs = [
+    {"role": "user", "content": "check server status"},
+    {"role": "assistant", "content": "Let me check the server status."},
+    {"role": "assistant", "reasoning": "The user wants a health check.",
+     "tool_calls": [{"id": "c1", "type": "function",
+                     "function": {"name": "bash", "arguments": '{"command": "uptime"}'}}]},
+    {"role": "tool", "tool_call_id": "c1", "content": "up 3 days"},
+]
+out = enc.encode_messages(msgs, thinking_mode="thinking", drop_thinking=False)
+
+canonical = ("<｜Assistant｜><think>The user wants a health check.</think>"
+             "Let me check the server status.\n\n<｜DSML｜tool_calls>")
+assert canonical in out, f"split assistant turn not merged (vllm#50686):\n{out}"
+# Only the trailing generation prompt may leave a <think> unclosed.
+assert out.count("<think>") - 1 == out.count("</think>"), f"unbalanced think tags:\n{out}"
+# A merged turn ends once; a stray mid-turn EOS is the original bug.
+assert out.count("<｜end▁of▁sentence｜>") == 1, f"stray mid-turn EOS:\n{out}"
+print("deepseek_v4 encoder merges split assistant turns OK")
+PY
