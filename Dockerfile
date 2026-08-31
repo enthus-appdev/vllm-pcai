@@ -34,6 +34,9 @@ FROM vllm/vllm-openai:nightly-44fe2a392b71d52a8d72faf2f8278834379482c9
 # Rebuild vLLM from the pinned base source, then install it over the stock wheel.
 COPY patches/54566-deepseek-v4-vision.patch /tmp/54566.patch
 RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends git; \
+    rm -rf /var/lib/apt/lists/*; \
     test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "c1205b5d1f6798d7d5dbbcef7d192bebe45a032291c8855b7c174750c342d86f"; \
     git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
     git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
