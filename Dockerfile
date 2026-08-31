@@ -28,6 +28,21 @@
 # different SHAs (they usually are) before treating it as a blocker.
 FROM vllm/vllm-openai:nightly-44fe2a392b71d52a8d72faf2f8278834379482c9
 
+# Exact four-commit patch series from upstream vllm#54566 at head
+# 93274397143dfc0135b6b0672859ffcab6e725a4. This PR changes both Python and the compiled
+# topk_softplus_sqrt operator, so patching site-packages alone would create an ABI mismatch.
+# Rebuild vLLM from the pinned base source, then install it over the stock wheel.
+COPY patches/54566-deepseek-v4-vision.patch /tmp/54566.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "c1205b5d1f6798d7d5dbbcef7d192bebe45a032291c8855b7c174750c342d86f"; \
+    git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
+    git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
+    git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
+    git -C /tmp/vllm-src apply /tmp/54566.patch; \
+    cd /tmp/vllm-src; \
+    TORCH_CUDA_ARCH_LIST=9.0 MAX_JOBS=4 pip install --no-deps --no-build-isolation .; \
+    rm -rf /tmp/vllm-src /tmp/54566.patch
+
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
 COPY chat-template-fix/chat-template/*.jinja /templates/
@@ -122,43 +137,23 @@ import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
 print("DSpark OK:", vllm.__version__)
 PY
 
-# DeepSeek-V4-Flash-Vision-Exp support from the implementation linked in vllm#54561. The checkpoint
-# declares the text architecture name, so serve it with:
-#   --hf-overrides '{"architectures":["DeepseekV4VForConditionalGeneration"]}'
-# Fidelity limitation inherited from the upstream proposal: image-span attention remains causal.
-COPY patches/54561-deepseek-v4-vision.patch /tmp/dsv4-vision.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-vision.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dsv4-vision.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/dsv4-vision.patch
-
+# Exact-PR tripwire: verifies the model and dedicated processor from vllm#54566 survived all
+# subsequent PCAI overlays.
 RUN python3 - <<'PY'
+from transformers.processing_utils import ProcessorMixin
 from vllm.model_executor.models.registry import ModelRegistry
-from vllm.models.deepseek_v4.vision_model import DeepseekV4VForConditionalGeneration
-arch = "DeepseekV4VForConditionalGeneration"
+from vllm.models.deepseek_v4.common.mm_preprocess import (
+    DeepseekV4VLProcessingInfo,
+    DeepseekV4VLProcessor,
+)
+from vllm.models.deepseek_v4.nvidia.vl_model import (
+    DeepseekV4ForConditionalGeneration,
+)
+arch = "DeepseekV4ForConditionalGeneration"
 assert arch in ModelRegistry.get_supported_archs(), arch
-assert getattr(DeepseekV4VForConditionalGeneration, "supports_multimodal", True)
-print("DeepSeek V4 Vision model registered OK")
-PY
-
-# The Vision checkpoint has three MTP layers but a trained DSpark block size of five. The generic
-# MTP validator rejects 5 because it is not divisible by 3, even though DSpark emits the whole
-# trained block in one parallel pass and does not reuse an MTP module per n_predict tokens.
-COPY patches/deepseek-v4-dspark-block-size.patch /tmp/dsv4-dspark-block.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-dspark-block.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dsv4-dspark-block.patch; fi; \
-    rm -f /tmp/dsv4-dspark-block.patch
-RUN python3 - <<'PY'
-import inspect
-from vllm.config.speculative import SpeculativeConfig
-src = inspect.getsource(SpeculativeConfig.__post_init__)
-assert 'self.method != "dspark"' in src
-assert "must be divisible by" in src
-print("DSpark bypasses MTP-only divisibility validation OK")
+assert issubclass(DeepseekV4VLProcessor, ProcessorMixin)
+assert DeepseekV4VLProcessingInfo.get_hf_processor.__annotations__["return"] is DeepseekV4VLProcessor
+print("exact vllm#54566 Vision model and processor registered OK")
 PY
 
 # With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
