@@ -42,8 +42,8 @@ RUN set -eux; \
     git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
     git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
     git -C /tmp/vllm-src apply /tmp/54566.patch; \
+    VLLM_DIR="$(cd / && python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; \
     cd /tmp/vllm-src; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
     cmake -S . -B /tmp/vllm-build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CUDA_ARCHITECTURES=90 \
