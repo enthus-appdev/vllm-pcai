@@ -32,6 +32,9 @@ jobs:
   build:
     name: Build and Push
     runs-on: ubuntu-latest
+    # PR #54566 changes a compiled CUDA operator; rebuilding that extension can
+    # exceed short organization defaults even though the normal cached build is fast.
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
