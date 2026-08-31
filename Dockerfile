@@ -37,15 +37,27 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 git ninja-build; \
     rm -rf /var/lib/apt/lists/*; \
-    pip install --no-cache-dir setuptools-rust; \
     test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "c1205b5d1f6798d7d5dbbcef7d192bebe45a032291c8855b7c174750c342d86f"; \
     git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
     git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
     git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
     git -C /tmp/vllm-src apply /tmp/54566.patch; \
     cd /tmp/vllm-src; \
-    TORCH_CUDA_ARCH_LIST=9.0 MAX_JOBS=4 pip install --no-deps --no-build-isolation .; \
-    rm -rf /tmp/vllm-src /tmp/54566.patch
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
+    cmake -S . -B /tmp/vllm-build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_ARCHITECTURES=90 \
+      -DCMAKE_JOB_POOL_COMPILE=compile \
+      -DCMAKE_JOB_POOLS=compile=4 \
+      -DVLLM_PYTHON_EXECUTABLE="$(command -v python3)" \
+      -DVLLM_PYTHON_PATH="$(python3 -c 'import sys; print(":".join(sys.path))')" \
+      -DVLLM_TARGET_DEVICE=cuda; \
+    cmake --build /tmp/vllm-build --target _C_stable_libtorch -j 4; \
+    cp -a vllm/. "$VLLM_DIR/"; \
+    SO="$(find /tmp/vllm-build -type f -name '_C_stable_libtorch*.so' -print -quit)"; \
+    test -n "$SO"; \
+    cp "$SO" "$VLLM_DIR/_C_stable_libtorch.abi3.so"; \
+    rm -rf /tmp/vllm-src /tmp/vllm-build /tmp/54566.patch
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
