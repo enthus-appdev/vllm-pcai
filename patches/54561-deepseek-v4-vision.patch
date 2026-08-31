@@ -1,0 +1,705 @@
+diff --git a/vllm/model_executor/models/registry.py b/vllm/model_executor/models/registry.py
+index 40f4a27d28..c6b6fa4cbb 100644
+--- a/vllm/model_executor/models/registry.py
++++ b/vllm/model_executor/models/registry.py
+@@ -341,6 +341,10 @@ _SEQUENCE_CLASSIFICATION_MODELS = {
+ }
+ 
+ _MULTIMODAL_MODELS = {
++    "DeepseekV4VForConditionalGeneration": (
++        "vllm.models.deepseek_v4.vision_model",
++        "DeepseekV4VForConditionalGeneration",
++    ),
+     # [Decoder-only]
+     "AriaForConditionalGeneration": ("aria", "AriaForConditionalGeneration"),
+     "AudioFlamingo3ForConditionalGeneration": (
+diff --git a/vllm/models/deepseek_v4/mm_preprocess.py b/vllm/models/deepseek_v4/mm_preprocess.py
+new file mode 100644
+index 0000000000..9e3c9bfb20
+--- /dev/null
++++ b/vllm/models/deepseek_v4/mm_preprocess.py
+@@ -0,0 +1,292 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Image preprocessing and multimodal processor for DeepSeek-V4-Flash-Vision-Exp.
++
++Ported from the reference ``inference/image_processor.py`` in the checkpoint.
++Every formula here is load-bearing: the aligner emits one embedding per 3x3
++patch block and those embeddings are scattered into an "N-layout" token grid, so
++any drift in the resize solver, the token count, or the permutation puts image
++features in the wrong positions.
++
++One structural note. The reference computes a leading pad of
++``3 - start_pos % 4`` so the first grid token lands on a multiple of 4 (the C4
++KV compressor's block). That makes an image's token count depend on its absolute
++offset in the prompt, which vLLM's ``_get_prompt_updates`` cannot express -- its
++replacement callables receive only ``item_idx``. We therefore do the whole
++tokenize-and-expand in ``_call_hf_processor``, where offsets are known, and use
++``_get_prompt_updates`` only to let the framework re-discover the already-placed
++blocks so it can record placeholder ranges.
++"""
++
++import math
++from collections.abc import Mapping, Sequence
++
++import numpy as np
++import torch
++from PIL import Image, ImageOps
++from transformers import BatchFeature
++
++from vllm.multimodal import MULTIMODAL_REGISTRY  # noqa: F401  (re-export use)
++from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalKwargsItems
++from vllm.multimodal.parse import ImageProcessorItems, MultiModalDataItems
++from vllm.multimodal.processing import (
++    BaseDummyInputsBuilder,
++    BaseMultiModalProcessor,
++    BaseProcessingInfo,
++    PromptReplacement,
++    PromptUpdate,
++)
++
++IMAGE_START, IMAGE_PAD, IMAGE, IMAGE_NEW_LINE, IMAGE_END = range(5)
++COMPRESS_PAD_TO = 4
++IMAGE_PLACEHOLDER = "<｜deepseek_image｜>"
++
++
++def grid_tokens(best_height, best_width, patch_size, downsample_ratio):
++    n_llm_h = math.ceil((best_height // patch_size) / downsample_ratio)
++    n_llm_w = math.ceil((best_width // patch_size) / downsample_ratio)
++    num_tokens = n_llm_h * (n_llm_w + 1) + 2
++    if n_llm_h % 2 == 1:
++        num_tokens += n_llm_w + 1
++    num_tokens += (n_llm_h + 1) // 2 * (n_llm_w + 1) % 2 * 2
++    return n_llm_h, n_llm_w, num_tokens
++
++
++def solve_resize_ratio(height, width, patch_size, downsample_ratio, max_n_token):
++    r = height / width
++    max_w_float = math.sqrt((max_n_token - 2) / r + 0.25) - 0.5
++    max_h_float = max_w_float * r
++    if max_w_float < 1.0:
++        max_w = 1
++        max_h = (max_n_token - 2) // (max_w + 1)
++        if max_h % 2 == 1:
++            max_h -= 1
++        best_width = max_w * patch_size * downsample_ratio
++        best_height = max_h * patch_size * downsample_ratio
++    elif max_h_float < 2.0:
++        max_h = 2
++        max_w = ((max_n_token - 2) // max_h) - 1
++        assert max_w > 1
++        best_width = max_w * patch_size * downsample_ratio
++        best_height = max_h * patch_size * downsample_ratio
++    else:
++        max_w = math.floor(max_w_float)
++        max_h = math.floor(max_h_float)
++        if max_h % 2 == 1:
++            max_h -= 1
++        beta = min(max_w * patch_size * downsample_ratio / width,
++                   max_h * patch_size * downsample_ratio / height)
++        best_width = math.floor(width * beta / patch_size) * patch_size
++        best_height = math.floor(height * beta / patch_size) * patch_size
++    n_llm_h, n_llm_w, num_tokens = grid_tokens(
++        best_height, best_width, patch_size, downsample_ratio)
++    return n_llm_h, n_llm_w, best_height, best_width, num_tokens
++
++
++def safe_resize(height, width, best_height, best_width, patch_size,
++                downsample_ratio, max_n_token):
++    max_n_token -= COMPRESS_PAD_TO - 1
++    n_llm_h, n_llm_w, num_tokens = grid_tokens(
++        best_height, best_width, patch_size, downsample_ratio)
++    budget = max_n_token
++    while num_tokens > max_n_token:
++        n_llm_h, n_llm_w, best_height, best_width, num_tokens = solve_resize_ratio(
++            height, width, patch_size, downsample_ratio, budget)
++        budget -= 1
++    return n_llm_h, n_llm_w, best_height, best_width
++
++
++def preprocess_image(image: Image.Image, cfg):
++    """PIL image -> (patches, n_vit_h, n_vit_w, n_llm_h, n_llm_w)."""
++    p = cfg.vision_patch_size
++    image = image.convert("RGB")
++    width, height = image.size
++    if cfg.vision_max_wh_ratio is not None and width > height * cfg.vision_max_wh_ratio:
++        width = height * cfg.vision_max_wh_ratio
++    if 0 < width * height < cfg.vision_min_pixels:
++        ratio = (cfg.vision_min_pixels / (width * height)) ** 0.5
++        width = int(width * ratio)
++        height = int(height * ratio)
++    best_width = math.ceil(width / p) * p
++    best_height = math.ceil(height / p) * p
++    n_llm_h, n_llm_w, best_height, best_width = safe_resize(
++        height, width, best_height, best_width, p,
++        cfg.vision_downsample_ratio, cfg.vision_max_n_token)
++    n_vit_h, n_vit_w = best_height // p, best_width // p
++    if (cfg.vision_max_wh_ratio is not None
++            and image.width >= cfg.vision_max_wh_ratio * image.height):
++        image = image.resize((best_width, best_height))
++    else:
++        image = ImageOps.pad(image, (best_width, best_height), color=(127, 127, 127))
++    x = torch.from_numpy(np.asarray(image, dtype=np.float32)).permute(2, 0, 1) / 255
++    x = ((x - 0.5) / 0.5).to(torch.bfloat16)
++    patches = x.reshape(3, n_vit_h, p, n_vit_w, p).permute(1, 3, 0, 2, 4).reshape(
++        n_vit_h * n_vit_w, 3, p, p)
++    return patches, n_vit_h, n_vit_w, n_llm_h, n_llm_w
++
++
++def build_image_block(n_llm_h: int, n_llm_w: int, start_pos: int):
++    """Token types in emission order, plus the aligner-row order for IMAGE slots."""
++    compress_pad = COMPRESS_PAD_TO - 1 - start_pos % COMPRESS_PAD_TO
++    pad_h = n_llm_h % 2
++    rows = n_llm_h + pad_h
++    row_len = n_llm_w + 1
++    pad_last = rows // 2 * row_len % 2 * 2
++    types = torch.tensor(
++        ([IMAGE] * n_llm_w + [IMAGE_NEW_LINE]) * n_llm_h
++        + [IMAGE_PAD] * (row_len * pad_h), dtype=torch.int64)
++    order = torch.arange(rows * row_len).view(rows // 2, 2, row_len).transpose(1, 2).reshape(-1)
++    image_idx = torch.full((rows * row_len,), -1, dtype=torch.int64)
++    image_idx.view(rows, row_len)[:n_llm_h, :n_llm_w] = torch.arange(
++        n_llm_h * n_llm_w).view(n_llm_h, n_llm_w)
++    perm = image_idx[order]
++    perm = perm[perm >= 0]
++    types = torch.cat([
++        torch.full((compress_pad,), IMAGE_PAD, dtype=torch.int64),
++        torch.tensor([IMAGE_START]),
++        types[order],
++        torch.full((pad_last,), IMAGE_PAD, dtype=torch.int64),
++        torch.tensor([IMAGE_END]),
++    ])
++    return types, perm
++
++
++def max_block_tokens(cfg) -> int:
++    """Worst-case tokens one image can occupy, for profiling."""
++    return cfg.vision_max_n_token
++
++
++class DeepseekV4VProcessingInfo(BaseProcessingInfo):
++
++    def get_supported_mm_limits(self) -> Mapping[str, int | None]:
++        return {"image": None}
++
++    def get_hf_config(self):
++        return self.ctx.model_config.hf_config
++
++    def get_num_image_tokens(self, *, image_width: int, image_height: int) -> int:
++        cfg = self.get_hf_config()
++        img = Image.new("RGB", (image_width, image_height))
++        _, _, _, n_llm_h, n_llm_w = preprocess_image(img, cfg)
++        _, _, n = grid_tokens(
++            n_llm_h * cfg.vision_downsample_ratio * cfg.vision_patch_size,
++            n_llm_w * cfg.vision_downsample_ratio * cfg.vision_patch_size,
++            cfg.vision_patch_size, cfg.vision_downsample_ratio)
++        # +3 covers the worst-case position-dependent leading pad.
++        return n + COMPRESS_PAD_TO - 1
++
++
++class DeepseekV4VDummyInputsBuilder(BaseDummyInputsBuilder[DeepseekV4VProcessingInfo]):
++
++    def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
++        return IMAGE_PLACEHOLDER * mm_counts.get("image", 0)
++
++    def get_dummy_mm_data(self, seq_len: int, mm_counts: Mapping[str, int],
++                          mm_options=None):
++        cfg = self.info.get_hf_config()
++        # Largest image that still fits the token budget, so profiling is worst-case.
++        side = int(math.sqrt(cfg.vision_min_pixels)) * 2
++        return {"image": self._get_dummy_images(
++            width=side, height=side, num_images=mm_counts.get("image", 0))}
++
++
++class DeepseekV4VMultiModalProcessor(BaseMultiModalProcessor[DeepseekV4VProcessingInfo]):
++
++    def _cached_apply_hf_processor(self, inputs, timing_ctx):
++        """Always take the uncached, whole-prompt path.
++
++        The per-item processing cache assumes an item's expansion is invariant
++        of the prompt it lands in. Ours is not: the leading pad is
++        ``3 - start_pos % 4``, so the same image expands differently depending
++        on its offset. Under the cached path vLLM also processes text and
++        images separately, which leaves our expansion unable to see the images
++        at all (out_mm_kwargs comes back with no modalities).
++        """
++        return self._apply_hf_processor(inputs, timing_ctx)
++
++    def _call_hf_processor(self, prompt, mm_data, mm_kwargs, tok_kwargs) -> BatchFeature:
++        cfg = self.info.get_hf_config()
++        tokenizer = self.info.get_tokenizer()
++        image_token_id = tokenizer.convert_tokens_to_ids(IMAGE_PLACEHOLDER)
++        vocab_size = cfg.vocab_size
++
++        # _get_hf_mm_data keys this by the HF processor convention ("images"),
++        # not by the vLLM modality name ("image"). Reading the wrong key here
++        # silently takes the text-only branch and emits no multimodal fields at
++        # all, which surfaces much later as "Modality 'image' not found".
++        images = mm_data.get("images")
++        if images is None:
++            images = mm_data.get("image") or []
++        if not isinstance(images, (list, tuple)):
++            images = [images]
++
++        prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
++
++        # vLLM calls the processor with the text prompt and no images during
++        # profiling and for text-only requests. The placeholder must then be
++        # left untouched: there is nothing to expand it into.
++        if not images:
++            return BatchFeature(
++                {"input_ids": torch.tensor([prompt_tokens], dtype=torch.int64)})
++
++        tokens: list[int] = []
++        all_patches, all_types, all_perm = [], [], []
++        n_vit, n_llm, blocks = [], [], []
++        it = iter(images)
++        for tok in prompt_tokens:
++            if tok != image_token_id:
++                tokens.append(tok)
++                continue
++            patches, n_vit_h, n_vit_w, n_llm_h, n_llm_w = preprocess_image(next(it), cfg)
++            types, perm = build_image_block(n_llm_h, n_llm_w, len(tokens))
++            block = (vocab_size + types).tolist()
++            tokens += block
++            all_patches.append(patches)
++            all_types.append(types)
++            all_perm.append(perm)
++            n_vit.append([n_vit_h, n_vit_w])
++            n_llm.append([n_llm_h, n_llm_w])
++            blocks.append(torch.tensor(block, dtype=torch.int64))
++
++        out = {"input_ids": torch.tensor([tokens], dtype=torch.int64)}
++        if all_patches:
++            out.update(
++                patches=torch.cat(all_patches, dim=0),
++                patch_sizes=torch.tensor([p.shape[0] for p in all_patches]),
++                types=torch.cat(all_types, dim=0),
++                type_sizes=torch.tensor([t.shape[0] for t in all_types]),
++                perm=torch.cat(all_perm, dim=0),
++                perm_sizes=torch.tensor([p.shape[0] for p in all_perm]),
++                n_vit=torch.tensor(n_vit, dtype=torch.int64),
++                n_llm=torch.tensor(n_llm, dtype=torch.int64),
++                token_blocks=torch.cat(blocks, dim=0),
++            )
++        return BatchFeature(out)
++
++    def _get_mm_fields_config(self, hf_inputs, hf_processor_mm_kwargs
++                              ) -> Mapping[str, MultiModalFieldConfig]:
++        patch_sizes = hf_inputs.get("patch_sizes", torch.empty(0, dtype=torch.int64))
++        type_sizes = hf_inputs.get("type_sizes", torch.empty(0, dtype=torch.int64))
++        perm_sizes = hf_inputs.get("perm_sizes", torch.empty(0, dtype=torch.int64))
++        return dict(
++            patches=MultiModalFieldConfig.flat_from_sizes("image", patch_sizes),
++            patch_sizes=MultiModalFieldConfig.batched("image"),
++            types=MultiModalFieldConfig.flat_from_sizes("image", type_sizes),
++            type_sizes=MultiModalFieldConfig.batched("image"),
++            perm=MultiModalFieldConfig.flat_from_sizes("image", perm_sizes),
++            perm_sizes=MultiModalFieldConfig.batched("image"),
++            n_vit=MultiModalFieldConfig.batched("image"),
++            n_llm=MultiModalFieldConfig.batched("image"),
++            token_blocks=MultiModalFieldConfig.flat_from_sizes("image", type_sizes),
++        )
++
++    def _get_prompt_updates(self, mm_items, hf_processor_mm_kwargs,
++                            out_mm_kwargs: MultiModalKwargsItems) -> Sequence[PromptUpdate]:
++        tokenizer = self.info.get_tokenizer()
++        image_token_id = tokenizer.convert_tokens_to_ids(IMAGE_PLACEHOLDER)
++
++        def replacement(item_idx: int):
++            item = out_mm_kwargs["image"][item_idx]
++            return item["token_blocks"].data.tolist()
++
++        return [PromptReplacement(modality="image", target=[image_token_id],
++                                  replacement=replacement)]
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index a469526316..ad51ce058a 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -819,6 +819,17 @@ class DeepseekV4MoE(nn.Module):
+                 requires_grad=False,
+             )
+ 
++        # Vision checkpoints (DeepSeek-V4-Flash-Vision-Exp) carry a second,
++        # modality-specific expert-selection bias per gate, applied only to
++        # image positions. Text routing is unchanged.
++        self.vl_vocab_size = config.vocab_size
++        self.gate.bias_vl = None
++        if int(getattr(config, "vision_n_layers", 0) or 0) > 0:
++            self.gate.bias_vl = nn.Parameter(
++                torch.empty(config.n_routed_experts, dtype=torch.float32),
++                requires_grad=False,
++            )
++
+         if config.n_shared_experts is None:
+             self.shared_experts = None
+         else:
+@@ -963,6 +974,16 @@ class DeepseekV4MoE(nn.Module):
+         if self.gate.tid2eid is not None and input_ids is None:
+             raise ValueError("DeepSeek V4 hash MoE routing requires input_ids.")
+ 
++        # Image positions carry out-of-vocabulary sentinel ids (vocab_size+0..4).
++        # tid2eid is sized [vocab_size, k], so they must not reach the hash
++        # lookup. Branch-free because this runs inside the torch.compile region,
++        # where a data-dependent `if mask.any()` cannot be captured.
++        image_mask = None
++        if input_ids is not None and getattr(self.gate, "bias_vl", None) is not None:
++            image_mask = input_ids >= self.vl_vocab_size
++            input_ids = torch.where(
++                image_mask, torch.zeros_like(input_ids), input_ids)
++
+         if not self.use_mega_moe:
+             return self._forward_fused_moe(hidden_states, input_ids)
+ 
+diff --git a/vllm/models/deepseek_v4/vision.py b/vllm/models/deepseek_v4/vision.py
+new file mode 100644
+index 0000000000..42d5139a9b
+--- /dev/null
++++ b/vllm/models/deepseek_v4/vision.py
+@@ -0,0 +1,148 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Vision tower and aligner for DeepSeek-V4-Flash-Vision-Exp.
++
++Faithful port of the reference implementation shipped in the checkpoint at
++``inference/vision.py``. Deliberately built from plain ``torch.nn`` modules and
++``F.scaled_dot_product_attention``: the tower and aligner are BF16 in the
++checkpoint (259 + 4 tensors, no scale tensors), and DeepseekV4FP8Config only
++attaches quant methods to ``LinearBase``/``RoutedExperts``, so plain modules can
++never be quantized by accident. This matches the deepseek_ocr2 precedent.
++
++The tower runs one image per call with full bidirectional attention and 2D RoPE;
++there is no CLS token, no learned position embedding, and no windowing.
++"""
++
++from functools import lru_cache
++
++import torch
++import torch.nn.functional as F
++from torch import nn
++
++
++@lru_cache(8)
++def _cos_sin(n_h: int, n_w: int, dim: int, theta: float):
++    """2D RoPE tables: the first half of each head's rotary block is driven by
++    the patch row, the second half by the column."""
++    inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
++    hpos = torch.arange(n_h).unsqueeze(1).expand(n_h, n_w)
++    wpos = torch.arange(n_w).unsqueeze(0).expand(n_h, n_w)
++    freqs = torch.stack([hpos, wpos], dim=-1).reshape(-1, 2, 1).float() * inv_freq
++    freqs = freqs.flatten(1)
++    return freqs.cos().unsqueeze(1), freqs.sin().unsqueeze(1)
++
++
++def _apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
++    dtype = x.dtype
++    x1, x2 = x.float().chunk(2, dim=-1)
++    return torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin], dim=-1).to(dtype)
++
++
++class VisionRMSNorm(nn.Module):
++    # eps is 1e-6 here, NOT the LM's rms_norm_eps (1e-20): the reference Block
++    # constructs RMSNorm(dim) with no eps argument, taking this default.
++    def __init__(self, dim: int, eps: float = 1e-6):
++        super().__init__()
++        self.eps = eps
++        self.weight = nn.Parameter(torch.ones(dim, dtype=torch.float32))
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:
++        dtype = x.dtype
++        x = x.float()
++        x = x * torch.rsqrt(x.square().mean(-1, keepdim=True) + self.eps)
++        return (self.weight * x).to(dtype)
++
++
++class PatchEmbed(nn.Module):
++    def __init__(self, dim: int, patch_size: int):
++        super().__init__()
++        self.proj = nn.Linear(3 * patch_size**2, dim)
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:
++        # Channel-major flatten: index = c*patch^2 + py*patch + px.
++        return self.proj(x.flatten(1))
++
++
++class VisionAttention(nn.Module):
++    def __init__(self, dim: int, n_heads: int):
++        super().__init__()
++        self.n_heads = n_heads
++        self.head_dim = dim // n_heads
++        self.wqkv = nn.Linear(dim, 3 * dim)
++        self.wo = nn.Linear(dim, dim)
++
++    def forward(self, x, cos, sin):
++        n = x.size(0)
++        q, k, v = (t.view(n, self.n_heads, self.head_dim)
++                   for t in self.wqkv(x).chunk(3, dim=-1))
++        q = _apply_rotary(q, cos, sin)
++        k = _apply_rotary(k, cos, sin)
++        o = F.scaled_dot_product_attention(
++            q.transpose(0, 1), k.transpose(0, 1), v.transpose(0, 1))
++        return self.wo(o.transpose(0, 1).reshape(n, -1))
++
++
++class VisionMLP(nn.Module):
++    def __init__(self, dim: int, inter_dim: int):
++        super().__init__()
++        self.w1 = nn.Linear(dim, 2 * inter_dim, bias=False)
++        self.w2 = nn.Linear(inter_dim, dim, bias=False)
++
++    def forward(self, x):
++        gate, up = self.w1(x).chunk(2, dim=-1)
++        return self.w2(F.silu(gate) * up)
++
++
++class VisionBlock(nn.Module):
++    def __init__(self, dim: int, n_heads: int, inter_dim: int):
++        super().__init__()
++        self.norm1 = VisionRMSNorm(dim)
++        self.attn = VisionAttention(dim, n_heads)
++        self.norm2 = VisionRMSNorm(dim)
++        self.mlp = VisionMLP(dim, inter_dim)
++
++    def forward(self, x, cos, sin):
++        x = x + self.attn(self.norm1(x), cos, sin)
++        return x + self.mlp(self.norm2(x))
++
++
++class DeepseekV4ViT(nn.Module):
++    def __init__(self, config):
++        super().__init__()
++        dim = config.vision_dim
++        n_heads = config.vision_n_heads
++        self.rope_dim = dim // n_heads // 2
++        self.rope_theta = config.vision_rope_theta
++        self.patch_embed = PatchEmbed(dim, config.vision_patch_size)
++        self.blocks = nn.ModuleList([
++            VisionBlock(dim, n_heads, config.vision_inter_dim)
++            for _ in range(config.vision_n_layers)
++        ])
++        self.norm = VisionRMSNorm(dim)
++
++    def forward(self, patches: torch.Tensor, n_h: int, n_w: int) -> torch.Tensor:
++        x = self.patch_embed(patches)
++        cos, sin = _cos_sin(n_h, n_w, self.rope_dim, self.rope_theta)
++        # _cos_sin builds on CPU and is lru_cached; move to the activation device.
++        cos = cos.to(x.device)
++        sin = sin.to(x.device)
++        for block in self.blocks:
++            x = block(x, cos, sin)
++        return self.norm(x)
++
++
++class DeepseekV4Aligner(nn.Module):
++    """3x3 space-to-depth (pixel-unshuffle) then a 2-layer GELU MLP to LM width."""
++
++    def __init__(self, config):
++        super().__init__()
++        self.r = config.vision_downsample_ratio
++        self.w1 = nn.Linear(config.vision_dim * self.r**2, config.hidden_size)
++        self.w2 = nn.Linear(config.hidden_size, config.hidden_size)
++
++    def forward(self, x: torch.Tensor, n_h: int, n_w: int) -> torch.Tensor:
++        r = self.r
++        x = x.view(n_h, n_w, -1).permute(2, 0, 1)
++        # Zero-pad right/bottom to a multiple of r, matching the reference.
++        x = F.pad(x, (0, -n_w % r, 0, -n_h % r))
++        x = F.unfold(x.unsqueeze(0), r, stride=r).squeeze(0).transpose(0, 1)
++        return self.w2(F.gelu(self.w1(x)))
+diff --git a/vllm/models/deepseek_v4/vision_model.py b/vllm/models/deepseek_v4/vision_model.py
+new file mode 100644
+index 0000000000..1b46f68882
+--- /dev/null
++++ b/vllm/models/deepseek_v4/vision_model.py
+@@ -0,0 +1,171 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Multimodal wrapper for DeepSeek-V4-Flash-Vision-Exp.
++
++Wraps the existing text-only DeepseekV4ForCausalLM with the checkpoint's ViT +
++aligner and the sentinel-block embedding layout.
++
++The image block is emitted as out-of-vocabulary token ids (vocab_size + type,
++i.e. 129280..129284). Those ids never index the embedding table -- the LM reads
++them for MoE routing and attention visibility -- so every position in the block
++is a "multimodal" position and embed_multimodal returns the whole block: the
++learned image_start/pad/newline/end vectors in their slots and aligner outputs
++at IMAGE slots, permuted into the N-layout by `perm`.
++"""
++
++from collections.abc import Iterable, Mapping
++
++import torch
++import torch.nn as nn
++
++from vllm.config import VllmConfig
++from vllm.model_executor.models.interfaces import (
++    MultiModalEmbeddings,
++    SupportsMultiModal,
++    SupportsPP,
++)
++from vllm.model_executor.models.module_mapping import MultiModelKeys
++from vllm.model_executor.models.utils import (
++    AutoWeightsLoader,
++    WeightsMapper,
++    init_vllm_registered_model,
++    maybe_prefix,
++)
++from vllm.multimodal import MULTIMODAL_REGISTRY
++from vllm.sequence import IntermediateTensors
++
++from vllm.models.deepseek_v4.mm_preprocess import (
++    IMAGE,
++    IMAGE_PLACEHOLDER,
++    DeepseekV4VDummyInputsBuilder,
++    DeepseekV4VMultiModalProcessor,
++    DeepseekV4VProcessingInfo,
++)
++from vllm.models.deepseek_v4.vision import DeepseekV4Aligner, DeepseekV4ViT
++
++
++@MULTIMODAL_REGISTRY.register_processor(
++    DeepseekV4VMultiModalProcessor,
++    info=DeepseekV4VProcessingInfo,
++    dummy_inputs=DeepseekV4VDummyInputsBuilder,
++)
++class DeepseekV4VForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
++    # The LM's MoE gate selects `bias_vl` over `bias` per position and the hash
++    # layers index tid2eid by token id, so the raw ids must reach forward().
++    requires_raw_input_tokens = True
++
++    hf_to_vllm_mapper = WeightsMapper(
++        orig_to_new_prefix={
++            "layers.": "language_model.layers.",
++            "embed.": "language_model.embed.",
++            "norm.": "language_model.norm.",
++            "hc_head": "language_model.hc_head",
++            "mtp.": "language_model.mtp.",
++        },
++        orig_to_new_suffix={"head.weight": "language_model.head.weight"},
++    )
++
++    @classmethod
++    def get_placeholder_str(cls, modality: str, i: int) -> str | None:
++        if modality.startswith("image"):
++            return IMAGE_PLACEHOLDER
++        return None
++
++    def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
++        super().__init__()
++        config = vllm_config.model_config.hf_config
++        self.config = config
++
++        with self._mark_tower_model(vllm_config, "image"):
++            # Plain nn.Modules: never handed a quant_config, so the BF16 tower
++            # cannot be picked up by DeepseekV4FP8Config.
++            self.vision = DeepseekV4ViT(config)
++            self.aligner = DeepseekV4Aligner(config)
++            hidden = config.hidden_size
++            self.image_start = nn.Parameter(torch.empty(hidden))
++            self.image_pad = nn.Parameter(torch.empty(hidden))
++            self.image_newline = nn.Parameter(torch.empty(hidden))
++            self.image_end = nn.Parameter(torch.empty(hidden))
++
++        with self._mark_language_model(vllm_config):
++            self.language_model = init_vllm_registered_model(
++                vllm_config=vllm_config,
++                prefix=maybe_prefix(prefix, "language_model"),
++                architectures=["DeepseekV4ForCausalLM"],
++            )
++
++        # 129280..129284 are >= vocab_size; this makes the default
++        # embed_input_ids mask them to 0 before the text-embedding gather.
++        vocab_size = config.vocab_size
++        self.configure_mm_token_handling(
++            vocab_size, [vocab_size + i for i in range(5)])
++
++    def _encode_one(self, patches, n_vit_h, n_vit_w, types, perm):
++        feats = self.vision(patches, n_vit_h, n_vit_w)
++        embeds = self.aligner(feats, n_vit_h, n_vit_w)[perm]
++        params = torch.stack([
++            self.image_start, self.image_pad, self.image_pad,
++            self.image_newline, self.image_end,
++        ]).to(embeds.dtype)
++        block = params[types]
++        block[types == IMAGE] = embeds.to(block.dtype)
++        return block
++
++    def embed_multimodal(self, **kwargs: object) -> MultiModalEmbeddings | None:
++        patches = kwargs.get("patches")
++        if patches is None:
++            return None
++        patch_sizes = kwargs["patch_sizes"]
++        types = kwargs["types"]
++        type_sizes = kwargs["type_sizes"]
++        perm = kwargs["perm"]
++        perm_sizes = kwargs["perm_sizes"]
++        n_vit = kwargs["n_vit"]
++
++        def _flat(x):
++            return torch.cat([t.flatten() for t in x]) if isinstance(x, (list, tuple)) else x.flatten()
++
++        patch_sizes = _flat(patch_sizes).tolist()
++        type_sizes = _flat(type_sizes).tolist()
++        perm_sizes = _flat(perm_sizes).tolist()
++        if isinstance(patches, (list, tuple)):
++            patches = torch.cat([p for p in patches], dim=0)
++        if isinstance(types, (list, tuple)):
++            types = torch.cat([t.flatten() for t in types], dim=0)
++        if isinstance(perm, (list, tuple)):
++            perm = torch.cat([p.flatten() for p in perm], dim=0)
++        if isinstance(n_vit, (list, tuple)):
++            n_vit = torch.cat([n.reshape(-1, 2) for n in n_vit], dim=0)
++        n_vit = n_vit.reshape(-1, 2)
++
++        device = next(self.vision.parameters()).device
++        out, po, to, ro = [], 0, 0, 0
++        for i, np_ in enumerate(patch_sizes):
++            ts, rs = type_sizes[i], perm_sizes[i]
++            out.append(self._encode_one(
++                patches[po:po + np_].to(device),
++                int(n_vit[i][0]), int(n_vit[i][1]),
++                types[to:to + ts].to(device),
++                perm[ro:ro + rs].to(device),
++            ))
++            po += np_; to += ts; ro += rs
++        return out
++
++    def forward(self, input_ids, positions, intermediate_tensors=None,
++                inputs_embeds=None, **kwargs):
++        return self.language_model(
++            input_ids=input_ids, positions=positions,
++            intermediate_tensors=intermediate_tensors, inputs_embeds=inputs_embeds)
++
++    def compute_logits(self, hidden_states, *args, **kwargs):
++        return self.language_model.compute_logits(hidden_states, *args, **kwargs)
++
++    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
++        loader = AutoWeightsLoader(self)
++        return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
++
++    def get_mm_mapping(self) -> MultiModelKeys:
++        return MultiModelKeys.from_string_field(
++            language_model="language_model",
++            connector="aligner",
++            tower_model="vision",
++        )
+diff --git a/vllm/v1/engine/input_processor.py b/vllm/v1/engine/input_processor.py
+index 4cc433cbfe..b149736602 100644
+--- a/vllm/v1/engine/input_processor.py
++++ b/vllm/v1/engine/input_processor.py
+@@ -539,7 +539,16 @@ class InputProcessor:
+                 raise VLLMValidationError(
+                     f"Token id {min_input_id} is out of vocabulary"
+                 )
+-            if max_input_id > max(tokenizer.max_token_id, model_vocab_size - 1):
++            allowed_max = max(tokenizer.max_token_id, model_vocab_size - 1)
++            # DeepSeek-V4 vision expands each image into a block of sentinel ids
++            # vocab_size + {0..4}. They never index the embedding table (the
++            # embeddings arrive through the multimodal path) but the language
++            # model reads them, to pick the bias_vl expert bias and to identify
++            # image spans.
++            hf_cfg = getattr(model_config, "hf_config", None)
++            if int(getattr(hf_cfg, "vision_n_layers", 0) or 0) > 0:
++                allowed_max = max(allowed_max, model_vocab_size + 4)
++            if max_input_id > allowed_max:
+                 raise VLLMValidationError(
+                     f"Token id {max_input_id} is out of vocabulary"
+                 )

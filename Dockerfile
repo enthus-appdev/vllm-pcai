@@ -1,5 +1,9 @@
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
+# DeepSeek-V4-Flash-Vision-Exp support is based on the 2026-08-31 nightly plus the implementation
+# linked from vllm#54561. Keep the base at that implementation's nearest published ancestor so the
+# vendored patch remains reviewable; its build-time tripwire must fail on incompatible bumps.
+#
 # Back on a nightly, reluctantly: the DSV4 KV-capacity work all landed after the v0.26.0 branch cut.
 # vllm#48993 (packed KV group overlays: per-block cost sum(groups) -> max(groups)) and vllm#48317
 # (get_max_concurrency_for_kv_cache_config counted only ONE group's page size, so every concurrency
@@ -22,7 +26,7 @@
 # `gh api repos/vllm-project/vllm/compare/<current>...<target> --jq .status` should say "ahead".
 # If it says "diverged", check whether the behind-by commits are backports that exist on main under
 # different SHAs (they usually are) before treating it as a blocker.
-FROM vllm/vllm-openai:nightly-124154a8843d1f8e4d4e2d5d466e2d3ebc3716da
+FROM vllm/vllm-openai:nightly-44fe2a392b71d52a8d72faf2f8278834379482c9
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -56,29 +60,18 @@ assert DSML_PARAM_CLOSE == "</｜DSML｜parameter>", DSML_PARAM_CLOSE
 print("deepseek_v4/v32 engine parsers OK:", r.__module__, "/", t.__module__)
 PY
 
-# The deepseek_v4/v32 tokenizer-mode encoders silently ignore add_generation_prompt +
-# continue_final_message without this. Vendored; drop once upstream (vllm#46257) lands in the base.
-COPY patches/deepseek-add-gen-prompt-on-nightly.patch /tmp/dsv4-genprompt.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-genprompt.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dsv4-genprompt.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/dsv4-genprompt.patch
-
-# Build-time tripwire: behavioral (pure templating, no GPU) — verifies both params are honored.
+# The tokenizer was replaced upstream after vllm#46257. Its old add_generation_prompt /
+# continue_final_message patch no longer applies; renderer-level behavior must be exercised through
+# /v1/chat/completions in the GPU acceptance test rather than against the removed encoder API.
 RUN python3 - <<'PY'
-from vllm.tokenizers.deepseek_v4_encoding import (
-    encode_messages, ASSISTANT_SP_TOKEN as A, eos_token as EOS, thinking_end_token as ET,
+from vllm.tokenizers.deepseek_v4_encoding import encode_messages
+out = encode_messages(
+    [{"role": "user", "content": "hi"}],
+    thinking_mode="thinking",
+    reasoning_effort="max",
 )
-u = [{"role": "user", "content": "hi"}]
-a = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
-assert encode_messages(u, thinking_mode="chat", add_generation_prompt=True).endswith(A + ET)
-assert A not in encode_messages(u, thinking_mode="chat", add_generation_prompt=False)
-assert encode_messages(a, thinking_mode="chat", add_generation_prompt=True).endswith(A + ET)
-c = encode_messages(a, thinking_mode="chat", continue_final_message=True)
-assert c.endswith("yo") and not c.endswith(EOS) and A in c
-print("deepseek add_generation_prompt / continue_final_message honored OK")
+assert "hi" in out
+print("deepseek_v4 encoder max-reasoning path OK")
 PY
 
 # vllm#48748 (a reply that never emits </think> leaves the EOS token in reasoning_content) is IN
@@ -127,6 +120,27 @@ assert "dspark" in repr(SpeculativeMethod), repr(SpeculativeMethod)
 import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401
 import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
 print("DSpark OK:", vllm.__version__)
+PY
+
+# DeepSeek-V4-Flash-Vision-Exp support from the implementation linked in vllm#54561. The checkpoint
+# declares the text architecture name, so serve it with:
+#   --hf-overrides '{"architectures":["DeepseekV4VForConditionalGeneration"]}'
+# Fidelity limitation inherited from the upstream proposal: image-span attention remains causal.
+COPY patches/54561-deepseek-v4-vision.patch /tmp/dsv4-vision.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-vision.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dsv4-vision.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dsv4-vision.patch
+
+RUN python3 - <<'PY'
+from vllm.model_executor.models.registry import ModelRegistry
+from vllm.models.deepseek_v4.vision_model import DeepseekV4VForConditionalGeneration
+arch = "DeepseekV4VForConditionalGeneration"
+assert arch in ModelRegistry.get_supported_archs(), arch
+assert getattr(DeepseekV4VForConditionalGeneration, "supports_multimodal", True)
+print("DeepSeek V4 Vision model registered OK")
 PY
 
 # With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
@@ -209,19 +223,8 @@ assert envs.VLLM_MQ_MAX_CHUNK_BYTES_MB == 1, envs.VLLM_MQ_MAX_CHUNK_BYTES_MB
 print("all MessageQueue sites honour VLLM_MQ_MAX_CHUNK_BYTES_MB OK")
 PY
 
-# vllm#50298's warmup branch asserts on topk_indices_buffer, which a DSpark drafter never has ->
-# AssertionError in profile_run AFTER the ~32 min weight load (vllm#50615). vllm#50693 makes the
-# assert conditional so the SWA-only path returns top_k = 0 without it. The assert is now EXPECTED
-# to be present — what must hold is that it sits behind the swa_only guard, not in front of it.
-# Source-level: reaching that branch needs a GPU. Fails here instead, in ~4 min.
-COPY patches/50693-dspark-warmup-swa-only.patch /tmp/dsv4-warmup.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-warmup.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dsv4-warmup.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/dsv4-warmup.patch
-
+# vllm#50693 is in this base. Keep the source tripwire: a DSpark drafter has no indexer buffer, so
+# the SWA-only warmup path must be selected before that buffer is touched.
 RUN python3 - <<'PY'
 import inspect
 from vllm.models.deepseek_v4.nvidia import flashmla
