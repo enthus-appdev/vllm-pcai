@@ -143,6 +143,24 @@ assert getattr(DeepseekV4VForConditionalGeneration, "supports_multimodal", True)
 print("DeepSeek V4 Vision model registered OK")
 PY
 
+# The Vision checkpoint has three MTP layers but a trained DSpark block size of five. The generic
+# MTP validator rejects 5 because it is not divisible by 3, even though DSpark emits the whole
+# trained block in one parallel pass and does not reuse an MTP module per n_predict tokens.
+COPY patches/deepseek-v4-dspark-block-size.patch /tmp/dsv4-dspark-block.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-dspark-block.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dsv4-dspark-block.patch; fi; \
+    rm -f /tmp/dsv4-dspark-block.patch
+RUN python3 - <<'PY'
+import inspect
+from vllm.config.speculative import SpeculativeConfig
+src = inspect.getsource(SpeculativeConfig.__post_init__)
+assert 'self.method != "dspark"' in src
+assert "must be divisible by" in src
+print("DSpark bypasses MTP-only divisibility validation OK")
+PY
+
 # With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
 # config-only cache dir (json/py/model, never safetensors) and keeps the URL in `model_weights`.
 # Drafters that live INSIDE the target checkpoint (DSpark, MTP) are built from the rewritten path
