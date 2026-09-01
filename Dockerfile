@@ -29,8 +29,8 @@
 # different SHAs (they usually are) before treating it as a blocker.
 FROM vllm/vllm-openai:nightly-44fe2a392b71d52a8d72faf2f8278834379482c9
 
-# Exact four-commit patch series from upstream vllm#54566 at head
-# 93274397143dfc0135b6b0672859ffcab6e725a4. This PR changes both Python and the compiled
+# Exact eleven-commit patch series from upstream vllm#54566 at head
+# 1576a46008f2411ec51391710c8886293f7a580f. This PR changes both Python and the compiled
 # topk_softplus_sqrt operator, so patching site-packages alone would create an ABI mismatch.
 # Rebuild vLLM from the pinned base source, then install it over the stock wheel.
 COPY patches/54566-deepseek-v4-vision.patch /tmp/54566.patch
@@ -40,7 +40,7 @@ RUN --mount=type=secret,id=gha-cache-url \
     apt-get update; \
     apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 git ninja-build sccache; \
     rm -rf /var/lib/apt/lists/*; \
-    test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "c1205b5d1f6798d7d5dbbcef7d192bebe45a032291c8855b7c174750c342d86f"; \
+    test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "5195c9ab8b345aba32ca9af04b195c9a0641a4521e04df59cfeab68067074f04"; \
     git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
     git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
     git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
