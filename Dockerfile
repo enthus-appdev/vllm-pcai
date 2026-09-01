@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
 # DeepSeek-V4-Flash-Vision-Exp support is based on the 2026-08-31 nightly plus the implementation
@@ -33,9 +34,11 @@ FROM vllm/vllm-openai:nightly-44fe2a392b71d52a8d72faf2f8278834379482c9
 # topk_softplus_sqrt operator, so patching site-packages alone would create an ABI mismatch.
 # Rebuild vLLM from the pinned base source, then install it over the stock wheel.
 COPY patches/54566-deepseek-v4-vision.patch /tmp/54566.patch
-RUN set -eux; \
+RUN --mount=type=secret,id=gha-cache-url \
+    --mount=type=secret,id=gha-runtime-token \
+    set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 git ninja-build; \
+    apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 git ninja-build sccache; \
     rm -rf /var/lib/apt/lists/*; \
     test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "c1205b5d1f6798d7d5dbbcef7d192bebe45a032291c8855b7c174750c342d86f"; \
     git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
@@ -43,8 +46,15 @@ RUN set -eux; \
     git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
     git -C /tmp/vllm-src apply /tmp/54566.patch; \
     VLLM_DIR="$(cd / && python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; \
+    if [ -s /run/secrets/gha-cache-url ] && [ -s /run/secrets/gha-runtime-token ]; then \
+      export SCCACHE_GHA_ENABLED=true; \
+      export ACTIONS_CACHE_URL="$(cat /run/secrets/gha-cache-url)"; \
+      export ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/gha-runtime-token)"; \
+    fi; \
     cd /tmp/vllm-src; \
     cmake -S . -B /tmp/vllm-build -G Ninja \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+      -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CUDA_ARCHITECTURES=90 \
       -DCMAKE_JOB_POOL_COMPILE=compile \
