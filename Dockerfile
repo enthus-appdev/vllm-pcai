@@ -62,11 +62,11 @@ RUN --mount=type=secret,id=gha-cache-url \
       -DVLLM_PYTHON_EXECUTABLE="$(command -v python3)" \
       -DVLLM_PYTHON_PATH="$(python3 -c 'import sys; print(":".join(sys.path))')" \
       -DVLLM_TARGET_DEVICE=cuda; \
-    cmake --build /tmp/vllm-build --target _C_stable_libtorch -j 4; \
+    cmake --build /tmp/vllm-build --target _moe_C_stable_libtorch -j 4; \
     cp -a vllm/. "$VLLM_DIR/"; \
-    SO="$(find /tmp/vllm-build -type f -name '_C_stable_libtorch*.so' -print -quit)"; \
+    SO="$(find /tmp/vllm-build -type f -name '_moe_C_stable_libtorch*.so' -print -quit)"; \
     test -n "$SO"; \
-    cp "$SO" "$VLLM_DIR/_C_stable_libtorch.abi3.so"; \
+    cp "$SO" "$VLLM_DIR/_moe_C_stable_libtorch.abi3.so"; \
     rm -rf /tmp/vllm-src /tmp/vllm-build /tmp/54566.patch
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
@@ -168,6 +168,8 @@ PY
 RUN python3 - <<'PY'
 from typing import get_type_hints
 
+import torch
+import vllm._custom_ops  # noqa: F401 - loads the native MoE extension
 from vllm.model_executor.models.registry import ModelRegistry
 from vllm.models.deepseek_v4.common.mm_preprocess import (
     DeepseekV4VLProcessingInfo,
@@ -180,7 +182,9 @@ arch = "DeepseekV4ForConditionalGeneration"
 assert arch in ModelRegistry.get_supported_archs(), arch
 assert callable(DeepseekV4VLProcessor)
 assert get_type_hints(DeepseekV4VLProcessingInfo.get_hf_processor)["return"].__name__ == "DeepseekV4VLProcessor"
-print("exact vllm#54566 Vision model and processor registered OK")
+schema = torch.ops._moe_C.topk_softplus_sqrt.default._schema
+assert len(schema.arguments) == 12, schema
+print("exact vllm#54566 Vision model, processor, and MoE ABI registered OK")
 PY
 
 # With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
