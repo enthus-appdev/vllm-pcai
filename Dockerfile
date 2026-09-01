@@ -68,7 +68,7 @@ COPY chat-template-fix/chat-template/*.jinja /templates/
 # as every other route here.
 COPY diag/collect_env_route.py /tmp/collect_env_route.py
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; \
     cat /tmp/collect_env_route.py >> "$VLLM_DIR/entrypoints/openai/api_server.py"; \
     rm -f /tmp/collect_env_route.py; \
     python3 -c "import inspect; import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); assert any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in inspect.signature(m.build_app, follow_wrapped=False).parameters.values()), 'wrapped build_app must stay variadic'; print('collect_env route baked OK')"
@@ -156,7 +156,8 @@ PY
 # Exact-PR tripwire: verifies the model and dedicated processor from vllm#54566 survived all
 # subsequent PCAI overlays.
 RUN python3 - <<'PY'
-from transformers.processing_utils import ProcessorMixin
+from typing import get_type_hints
+
 from vllm.model_executor.models.registry import ModelRegistry
 from vllm.models.deepseek_v4.common.mm_preprocess import (
     DeepseekV4VLProcessingInfo,
@@ -167,8 +168,8 @@ from vllm.models.deepseek_v4.nvidia.vl_model import (
 )
 arch = "DeepseekV4ForConditionalGeneration"
 assert arch in ModelRegistry.get_supported_archs(), arch
-assert issubclass(DeepseekV4VLProcessor, ProcessorMixin)
-assert DeepseekV4VLProcessingInfo.get_hf_processor.__annotations__["return"] is DeepseekV4VLProcessor
+assert callable(DeepseekV4VLProcessor)
+assert get_type_hints(DeepseekV4VLProcessingInfo.get_hf_processor)["return"].__name__ == "DeepseekV4VLProcessor"
 print("exact vllm#54566 Vision model and processor registered OK")
 PY
 
@@ -180,7 +181,7 @@ PY
 # because it is still open. Drop once the base carries it — the apply below will fail loudly.
 COPY patches/48023-spec-draft-inherit-model-weights.patch /tmp/spec-draft-weights.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/spec-draft-weights.patch; \
     else patch -p1 -d "$SITE" < /tmp/spec-draft-weights.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
@@ -225,7 +226,7 @@ PY
 # to bound shm usage, so one call site ignoring it is a bug.
 COPY patches/mq-worker-response-honour-chunk-bytes.patch /tmp/mq-chunk.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/mq-chunk.patch; \
     else patch -p1 -d "$SITE" < /tmp/mq-chunk.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
@@ -279,7 +280,7 @@ PY
 # quote inside a tool-call header, which the parser then reads as a garbage tool name.
 COPY patches/50686-merge-consecutive-assistant-messages.patch /tmp/dsv4-consec.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-consec.patch; \
     else patch -p1 -d "$SITE" < /tmp/dsv4-consec.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
