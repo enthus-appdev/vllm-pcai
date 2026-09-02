@@ -1,0 +1,2 @@
+# Vendored patches are byte-for-byte upstream artifacts; do not normalize them.
+patches/*.patch -text whitespace=-blank-at-eol

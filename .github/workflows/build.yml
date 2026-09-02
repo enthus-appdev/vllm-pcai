@@ -32,6 +32,9 @@ jobs:
   build:
     name: Build and Push
     runs-on: ubuntu-latest
+    # PR #54566 changes a compiled CUDA operator; rebuilding that extension can
+    # exceed short organization defaults even though the normal cached build is fast.
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -92,6 +95,10 @@ jobs:
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Expose Actions cache runtime
+        if: steps.dockerfile.outputs.exists == 'true'
+        uses: crazy-max/ghaction-github-runtime@v3
+
       - name: Build and push
         if: steps.dockerfile.outputs.exists == 'true'
         id: build
@@ -104,6 +111,12 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # vLLM's CUDA extension exceeds this repository's runner lifetime on a
+          # cold build. sccache writes each completed object to Actions cache,
+          # so interrupted/retried jobs resume instead of recompiling it.
+          secret-envs: |
+            gha-cache-url=ACTIONS_CACHE_URL
+            gha-runtime-token=ACTIONS_RUNTIME_TOKEN
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache${{ matrix.flavor }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache${{ matrix.flavor }},mode=max
 

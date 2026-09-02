@@ -12,7 +12,7 @@ PCAI cannot mount volumes through its UI, so anything a model needs at runtime t
 
 3. **Vendored patches** — upstream fixes the base image does not carry yet, including the spec-decode drafter weight-source fix ([#48023](https://github.com/vllm-project/vllm/pull/48023), fixing [#42060](https://github.com/vllm-project/vllm/issues/42060)) and the PCAI `/dev/shm` queue-size fix.
 
-4. **Experimental DeepSeek V4 Vision support** — vendors the implementation linked from [vllm#54561](https://github.com/vllm-project/vllm/issues/54561). The checkpoint must be served with `--hf-overrides '{"architectures":["DeepseekV4VForConditionalGeneration"]}'`. Image-span attention remains causal, matching the upstream proposal's documented fidelity limitation.
+4. **Experimental DeepSeek V4 Vision support** — vendors the exact eleven-commit patch series from [vllm#54566](https://github.com/vllm-project/vllm/pull/54566) at head `1576a46008f2411ec51391710c8886293f7a580f`. The image rebuilds vLLM because that PR changes both Python and the compiled MoE routing operator. Do not pass an architecture override; the PR's config converter selects `DeepseekV4ForConditionalGeneration` when it detects the Vision checkpoint. The upstream PR now explicitly rejects speculative decoding for the Vision variant because its image sentinel token IDs are outside the drafter vocabulary, so start this experimental checkpoint without speculative decoding.
 
 5. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
 
@@ -39,7 +39,7 @@ vllm-pcai/
 │                               + Build-time tripwires for all three models
 ├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
 ├── diag/                     # collect_env_route.py
-├── patches/                  # 54561-deepseek-v4-vision.patch (experimental Vision support)
+├── patches/                  # 54566-deepseek-v4-vision.patch (exact upstream PR series)
 │                             # 48023-spec-draft-inherit-model-weights.patch (#48023)
 └── .dockerignore
 ```

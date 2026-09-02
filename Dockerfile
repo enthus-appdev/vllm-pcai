@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
 # DeepSeek-V4-Flash-Vision-Exp support is based on the 2026-08-31 nightly plus the implementation
@@ -28,6 +29,46 @@
 # different SHAs (they usually are) before treating it as a blocker.
 FROM vllm/vllm-openai:nightly-44fe2a392b71d52a8d72faf2f8278834379482c9
 
+# Exact eleven-commit patch series from upstream vllm#54566 at head
+# 1576a46008f2411ec51391710c8886293f7a580f. This PR changes both Python and the compiled
+# topk_softplus_sqrt operator, so patching site-packages alone would create an ABI mismatch.
+# Rebuild vLLM from the pinned base source, then install it over the stock wheel.
+COPY patches/54566-deepseek-v4-vision.patch /tmp/54566.patch
+RUN --mount=type=secret,id=gha-cache-url \
+    --mount=type=secret,id=gha-runtime-token \
+    set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 git ninja-build sccache; \
+    rm -rf /var/lib/apt/lists/*; \
+    test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "5195c9ab8b345aba32ca9af04b195c9a0641a4521e04df59cfeab68067074f04"; \
+    git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
+    git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
+    git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
+    git -C /tmp/vllm-src apply /tmp/54566.patch; \
+    VLLM_DIR="$(cd / && python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; \
+    if [ -s /run/secrets/gha-cache-url ] && [ -s /run/secrets/gha-runtime-token ]; then \
+      export SCCACHE_GHA_ENABLED=true; \
+      export ACTIONS_CACHE_URL="$(cat /run/secrets/gha-cache-url)"; \
+      export ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/gha-runtime-token)"; \
+    fi; \
+    cd /tmp/vllm-src; \
+    cmake -S . -B /tmp/vllm-build -G Ninja \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+      -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_ARCHITECTURES=90 \
+      -DCMAKE_JOB_POOL_COMPILE=compile \
+      -DCMAKE_JOB_POOLS=compile=4 \
+      -DVLLM_PYTHON_EXECUTABLE="$(command -v python3)" \
+      -DVLLM_PYTHON_PATH="$(python3 -c 'import sys; print(":".join(sys.path))')" \
+      -DVLLM_TARGET_DEVICE=cuda; \
+    cmake --build /tmp/vllm-build --target _moe_C_stable_libtorch -j 4; \
+    cp -a vllm/. "$VLLM_DIR/"; \
+    SO="$(find /tmp/vllm-build -type f -name '_moe_C_stable_libtorch*.so' -print -quit)"; \
+    test -n "$SO"; \
+    cp "$SO" "$VLLM_DIR/_moe_C_stable_libtorch.abi3.so"; \
+    rm -rf /tmp/vllm-src /tmp/vllm-build /tmp/54566.patch
+
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
 COPY chat-template-fix/chat-template/*.jinja /templates/
@@ -37,7 +78,7 @@ COPY chat-template-fix/chat-template/*.jinja /templates/
 # as every other route here.
 COPY diag/collect_env_route.py /tmp/collect_env_route.py
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; \
     cat /tmp/collect_env_route.py >> "$VLLM_DIR/entrypoints/openai/api_server.py"; \
     rm -f /tmp/collect_env_route.py; \
     python3 -c "import inspect; import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); assert any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in inspect.signature(m.build_app, follow_wrapped=False).parameters.values()), 'wrapped build_app must stay variadic'; print('collect_env route baked OK')"
@@ -122,43 +163,28 @@ import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
 print("DSpark OK:", vllm.__version__)
 PY
 
-# DeepSeek-V4-Flash-Vision-Exp support from the implementation linked in vllm#54561. The checkpoint
-# declares the text architecture name, so serve it with:
-#   --hf-overrides '{"architectures":["DeepseekV4VForConditionalGeneration"]}'
-# Fidelity limitation inherited from the upstream proposal: image-span attention remains causal.
-COPY patches/54561-deepseek-v4-vision.patch /tmp/dsv4-vision.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-vision.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dsv4-vision.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/dsv4-vision.patch
-
+# Exact-PR tripwire: verifies the model and dedicated processor from vllm#54566 survived all
+# subsequent PCAI overlays.
 RUN python3 - <<'PY'
+from typing import get_type_hints
+
+import torch
+import vllm._custom_ops  # noqa: F401 - loads the native MoE extension
 from vllm.model_executor.models.registry import ModelRegistry
-from vllm.models.deepseek_v4.vision_model import DeepseekV4VForConditionalGeneration
-arch = "DeepseekV4VForConditionalGeneration"
+from vllm.models.deepseek_v4.common.mm_preprocess import (
+    DeepseekV4VLProcessingInfo,
+    DeepseekV4VLProcessor,
+)
+from vllm.models.deepseek_v4.nvidia.vl_model import (
+    DeepseekV4ForConditionalGeneration,
+)
+arch = "DeepseekV4ForConditionalGeneration"
 assert arch in ModelRegistry.get_supported_archs(), arch
-assert getattr(DeepseekV4VForConditionalGeneration, "supports_multimodal", True)
-print("DeepSeek V4 Vision model registered OK")
-PY
-
-# The Vision checkpoint has three MTP layers but a trained DSpark block size of five. The generic
-# MTP validator rejects 5 because it is not divisible by 3, even though DSpark emits the whole
-# trained block in one parallel pass and does not reuse an MTP module per n_predict tokens.
-COPY patches/deepseek-v4-dspark-block-size.patch /tmp/dsv4-dspark-block.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-dspark-block.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dsv4-dspark-block.patch; fi; \
-    rm -f /tmp/dsv4-dspark-block.patch
-RUN python3 - <<'PY'
-import inspect
-from vllm.config.speculative import SpeculativeConfig
-src = inspect.getsource(SpeculativeConfig.__post_init__)
-assert 'self.method != "dspark"' in src
-assert "must be divisible by" in src
-print("DSpark bypasses MTP-only divisibility validation OK")
+assert callable(DeepseekV4VLProcessor)
+assert get_type_hints(DeepseekV4VLProcessingInfo.get_hf_processor)["return"].__name__ == "DeepseekV4VLProcessor"
+schema = torch.ops._moe_C.topk_softplus_sqrt.default._schema
+assert len(schema.arguments) == 12, schema
+print("exact vllm#54566 Vision model, processor, and MoE ABI registered OK")
 PY
 
 # With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
@@ -169,7 +195,7 @@ PY
 # because it is still open. Drop once the base carries it — the apply below will fail loudly.
 COPY patches/48023-spec-draft-inherit-model-weights.patch /tmp/spec-draft-weights.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/spec-draft-weights.patch; \
     else patch -p1 -d "$SITE" < /tmp/spec-draft-weights.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
@@ -214,7 +240,7 @@ PY
 # to bound shm usage, so one call site ignoring it is a bug.
 COPY patches/mq-worker-response-honour-chunk-bytes.patch /tmp/mq-chunk.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/mq-chunk.patch; \
     else patch -p1 -d "$SITE" < /tmp/mq-chunk.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
@@ -268,7 +294,7 @@ PY
 # quote inside a tool-call header, which the parser then reads as a garbage tool name.
 COPY patches/50686-merge-consecutive-assistant-messages.patch /tmp/dsv4-consec.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-consec.patch; \
     else patch -p1 -d "$SITE" < /tmp/dsv4-consec.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
