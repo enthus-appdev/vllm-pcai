@@ -39,10 +39,14 @@ COPY patches/54566-deepseek-v4-vision.patch /tmp/54566.patch
 COPY patches/54631-deepseek-v4-vision-streaming-dspark.patch /tmp/54631.patch
 RUN --mount=type=secret,id=gha-cache-url \
     --mount=type=secret,id=gha-runtime-token \
+    --mount=type=secret,id=github-token \
     set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 curl git ninja-build sccache; \
     rm -rf /var/lib/apt/lists/*; \
+    if [ -s /run/secrets/github-token ]; then \
+      git config --global url."https://x-access-token:$(cat /run/secrets/github-token)@github.com/".insteadOf https://github.com/; \
+    fi; \
     test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "5195c9ab8b345aba32ca9af04b195c9a0641a4521e04df59cfeab68067074f04"; \
     test "$(sha256sum /tmp/54631.patch | cut -d' ' -f1)" = "3f0a8ca912c5f3d3700529cd9e05e2a98492f349332f42a59ae685bd5576cd07"; \
     mkdir /tmp/vllm-src; \
@@ -75,6 +79,7 @@ RUN --mount=type=secret,id=gha-cache-url \
     SO="$(find /tmp/vllm-build -type f -name '_moe_C_stable_libtorch*.so' -print -quit)"; \
     test -n "$SO"; \
     cp "$SO" "$VLLM_DIR/_moe_C_stable_libtorch.abi3.so"; \
+    rm -f /root/.gitconfig; \
     rm -rf /tmp/vllm-src /tmp/vllm-build /tmp/54566.patch /tmp/54631.patch
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
