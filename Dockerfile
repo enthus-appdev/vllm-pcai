@@ -34,6 +34,9 @@ FROM vllm/vllm-openai:nightly-44fe2a392b71d52a8d72faf2f8278834379482c9
 # topk_softplus_sqrt operator, so patching site-packages alone would create an ABI mismatch.
 # Rebuild vLLM from the pinned base source, then install it over the stock wheel.
 COPY patches/54566-deepseek-v4-vision.patch /tmp/54566.patch
+# Exact two-commit follow-up stacked on vllm#54566: stream checkpoint weights and derive
+# Vision DSpark width from the trained dspark_block_size.
+COPY patches/54631-deepseek-v4-vision-streaming-dspark.patch /tmp/54631.patch
 RUN --mount=type=secret,id=gha-cache-url \
     --mount=type=secret,id=gha-runtime-token \
     set -eux; \
@@ -41,10 +44,13 @@ RUN --mount=type=secret,id=gha-cache-url \
     apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 git ninja-build sccache; \
     rm -rf /var/lib/apt/lists/*; \
     test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "5195c9ab8b345aba32ca9af04b195c9a0641a4521e04df59cfeab68067074f04"; \
+    test "$(sha256sum /tmp/54631.patch | cut -d' ' -f1)" = "3f0a8ca912c5f3d3700529cd9e05e2a98492f349332f42a59ae685bd5576cd07"; \
     git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
     git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
     git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
     git -C /tmp/vllm-src apply /tmp/54566.patch; \
+    git -C /tmp/vllm-src apply --check /tmp/54631.patch; \
+    git -C /tmp/vllm-src apply /tmp/54631.patch; \
     VLLM_DIR="$(cd / && python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; \
     if [ -s /run/secrets/gha-cache-url ] && [ -s /run/secrets/gha-runtime-token ]; then \
       export SCCACHE_GHA_ENABLED=true; \
@@ -67,7 +73,7 @@ RUN --mount=type=secret,id=gha-cache-url \
     SO="$(find /tmp/vllm-build -type f -name '_moe_C_stable_libtorch*.so' -print -quit)"; \
     test -n "$SO"; \
     cp "$SO" "$VLLM_DIR/_moe_C_stable_libtorch.abi3.so"; \
-    rm -rf /tmp/vllm-src /tmp/vllm-build /tmp/54566.patch
+    rm -rf /tmp/vllm-src /tmp/vllm-build /tmp/54566.patch /tmp/54631.patch
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -155,12 +161,22 @@ PY
 # Tripwire: a bump that drops DSpark fails HERE. Does NOT prove the Hopper kernels lower or that
 # acceptance is good — both need GPU + the checkpoint.
 RUN python3 - <<'PY'
+import inspect
+
 import vllm
-from vllm.config.speculative import SpeculativeMethod
+from vllm.config.speculative import SpeculativeConfig, SpeculativeMethod
+from vllm.models.deepseek_v4.nvidia.vl_model import DeepseekV4ForConditionalGeneration
 assert "dspark" in repr(SpeculativeMethod), repr(SpeculativeMethod)
 import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401
 import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
-print("DSpark OK:", vllm.__version__)
+normalize = inspect.getsource(SpeculativeConfig._normalize_deepseek_v4_dspark_hf_config)
+assert "dspark_block_size" in normalize and "DSparkDraftModel" in normalize
+load_weights = inspect.getsource(DeepseekV4ForConditionalGeneration.load_weights)
+assert "sorted(" not in load_weights
+assert "process_weights_after_loading" in inspect.getsource(
+    DeepseekV4ForConditionalGeneration.process_weights_after_loading
+)
+print("DSpark and streaming Vision weights OK:", vllm.__version__)
 PY
 
 # Exact-PR tripwire: verifies the model and dedicated processor from vllm#54566 survived all
