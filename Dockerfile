@@ -41,12 +41,14 @@ RUN --mount=type=secret,id=gha-cache-url \
     --mount=type=secret,id=gha-runtime-token \
     set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 git ninja-build sccache; \
+    apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 curl git ninja-build sccache; \
     rm -rf /var/lib/apt/lists/*; \
     test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "5195c9ab8b345aba32ca9af04b195c9a0641a4521e04df59cfeab68067074f04"; \
     test "$(sha256sum /tmp/54631.patch | cut -d' ' -f1)" = "3f0a8ca912c5f3d3700529cd9e05e2a98492f349332f42a59ae685bd5576cd07"; \
-    git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
-    git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
+    mkdir /tmp/vllm-src; \
+    curl --fail --location --retry 5 \
+      https://github.com/vllm-project/vllm/archive/44fe2a392b71d52a8d72faf2f8278834379482c9.tar.gz \
+      | tar -xz --strip-components=1 -C /tmp/vllm-src; \
     git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
     git -C /tmp/vllm-src apply /tmp/54566.patch; \
     git -C /tmp/vllm-src apply --check /tmp/54631.patch; \
