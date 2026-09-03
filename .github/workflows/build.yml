@@ -97,7 +97,7 @@ jobs:
 
       - name: Expose Actions cache runtime
         if: steps.dockerfile.outputs.exists == 'true'
-        uses: crazy-max/ghaction-github-runtime@v3
+        uses: crazy-max/ghaction-github-runtime@v4
 
       - name: Build and push
         if: steps.dockerfile.outputs.exists == 'true'
