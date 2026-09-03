@@ -117,6 +117,8 @@ jobs:
           secret-envs: |
             gha-cache-url=ACTIONS_CACHE_URL
             gha-runtime-token=ACTIONS_RUNTIME_TOKEN
+          secrets: |
+            github-token=${{ secrets.GITHUB_TOKEN }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache${{ matrix.flavor }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache${{ matrix.flavor }},mode=max
 
