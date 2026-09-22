@@ -103,4 +103,3 @@ index 16bfa1a99a1b..531c4eb28d8d 100644
 +        context = merge_consecutive_assistant_messages(context)
          context = merge_tool_messages(context)
          context = sort_tool_results_by_call_order(context)
- 

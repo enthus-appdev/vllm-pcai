@@ -4,43 +4,36 @@ Custom [vLLM](https://github.com/vllm-project/vllm) images for **HPE Private Clo
 
 ## Why this image exists
 
-PCAI cannot mount volumes through its UI, so anything a model needs at runtime that isn't in the base `vllm/vllm-openai` image **must be baked in**. This image adds five layers on top of the stock vLLM base:
+PCAI cannot mount volumes through its UI, so anything a model needs at runtime that isn't in the base `vllm/vllm-openai` image **must be baked in**. This image adds four layers on top of the stock vLLM base:
 
 1. **Enhanced chat templates** — Qwen3.5/3.6 hardened templates (hidden historical reasoning, XML tool-call formatting, proper ` response` handling) from [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image. (Gemma 4 uses vLLM's **in-image** template at `/vllm-workspace/examples/tool_chat_template_gemma4.jinja`.)
 
 2. **Diagnostics endpoint** — `GET /collect_env` on the serving port (same bearer-gate) so PCAI's shell-less pods can still report versions, GPU topology, and env vars.
 
-3. **Vendored patches** — upstream fixes the base image does not carry yet, including the spec-decode drafter weight-source fix ([#48023](https://github.com/vllm-project/vllm/pull/48023), fixing [#42060](https://github.com/vllm-project/vllm/issues/42060)) and the PCAI `/dev/shm` queue-size fix.
+3. **Vendored patches** — the `deepseek_v4` generation-control fix ([#46257](https://github.com/vllm-project/vllm/pull/46257), exact source diff from rebased head `3dd748819f25fa64250258cdb059c5b0e4487563`, cleanly applicable to v0.30.0), the speculative drafter weight-source fix ([#48023](https://github.com/vllm-project/vllm/pull/48023)), the consecutive-assistant-message fix ([#50686](https://github.com/vllm-project/vllm/pull/50686)), and PCAI's `/dev/shm` queue-size fix. The former EOS reasoning-leak patch ([#48748](https://github.com/vllm-project/vllm/pull/48748)) is upstream and retained as a regression assertion only.
 
-4. **Experimental DeepSeek V4 Vision support** — vendors the exact eleven-commit patch series from [vllm#54566](https://github.com/vllm-project/vllm/pull/54566) at head `1576a46008f2411ec51391710c8886293f7a580f`. The image rebuilds vLLM because that PR changes both Python and the compiled MoE routing operator. Do not pass an architecture override; the PR's config converter selects `DeepseekV4ForConditionalGeneration` when it detects the Vision checkpoint. The upstream PR now explicitly rejects speculative decoding for the Vision variant because its image sentinel token IDs are outside the drafter vocabulary, so start this experimental checkpoint without speculative decoding.
+4. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
 
-5. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
+## Base image: `v0.30.0`
 
-## Base image: `nightly-44fe2a39`
+The `FROM` is the **`v0.30.0` release**. It retains the streaming ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, and packed heterogeneous-KV support used by PCAI. It also includes [#52923](https://github.com/vllm-project/vllm/pull/52923), which bounds OffloadingConnector store work by both allocated GPU chunks and available offload keys; v0.26.0 could violate that invariant and terminate EngineCore under live traffic.
 
-The `FROM` is a pinned **nightly**, back off the `v0.26.0` release it briefly reached. The DeepSeek-V4 KV-capacity work all landed after the `v0.26.0` branch cut: [#48993](https://github.com/vllm-project/vllm/pull/48993) (packed KV group overlays — per-block cost drops from `sum(groups)` to `max(groups)`) and [#48317](https://github.com/vllm-project/vllm/pull/48317) (a correctness fix to `get_max_concurrency_for_kv_cache_config`, which counted only one group's page size and therefore overstated every concurrency figure). Riding along are the later DeepSeek V4 kernel, DSpark, parser, and multimodal-framework changes through the pinned 2026-08-31 nightly. `v0.26.1rc0` carries the first two KV fixes but is a git tag only — no image is published.
+The DeepSeek V4 DSpark external-cache lookup defect remains open upstream in [#47890](https://github.com/vllm-project/vllm/issues/47890). Proposed fixes [#47891](https://github.com/vllm-project/vllm/pull/47891) and [#48459](https://github.com/vllm-project/vllm/pull/48459) predate v0.30.0, overlap, and do not apply cleanly to its evolved KV scheduler. They are deliberately **not** carried as an unreviewed conflict resolution. Keep native CPU KV offloading disabled for DSpark until upstream rebases/merges the fix or an exact, tested v0.30.0 backport is available.
 
-**Nightly tags are pruned after roughly two weeks.** If a rebuild fails on an unresolvable `FROM`, that is the cause; move to the first *release* tag that is a superset rather than silently picking a newer nightly.
-
-**Bumping is not a date comparison.** vLLM cuts release branches, so a later tag can be *missing* commits present in an earlier nightly — #47914 merged 2026-07-08 yet is absent from `v0.25.0` (tagged 07-11). Before any bump, verify the target is a superset:
-
-```bash
-gh api repos/vllm-project/vllm/compare/<current-sha-or-tag>...<new-tag> --jq .status   # want: "ahead"
-```
+**Bumping is not a date comparison.** vLLM cuts release branches, so validate required behavior with the Dockerfile tripwires and GPU workloads rather than relying only on release dates or commit ancestry.
 
 ## Layout
 
 ```
 vllm-pcai/
-├── Dockerfile                # FROM vllm/vllm-openai:nightly-44fe2a39
+├── Dockerfile                # FROM vllm/vllm-openai:v0.30.0
 │                               + Qwen enhanced templates
 │                               + /collect_env diagnostics route
 │                               + DeepSeek V4 parser patches
 │                               + Build-time tripwires for all three models
 ├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
 ├── diag/                     # collect_env_route.py
-├── patches/                  # 54566-deepseek-v4-vision.patch (exact upstream PR series)
-│                             # 48023-spec-draft-inherit-model-weights.patch (#48023)
+├── patches/                  # v0.30.0-compatible parser, drafter, and PCAI queue fixes
 └── .dockerignore
 ```
 

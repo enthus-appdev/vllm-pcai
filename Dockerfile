@@ -1,73 +1,10 @@
-# syntax=docker/dockerfile:1
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
-# DeepSeek-V4-Flash-Vision-Exp support is based on the 2026-08-31 nightly plus the implementation
-# linked from vllm#54561. Keep the base at that implementation's nearest published ancestor so the
-# vendored patch remains reviewable; its build-time tripwire must fail on incompatible bumps.
-#
-# Back on a nightly, reluctantly: the DSV4 KV-capacity work all landed after the v0.26.0 branch cut.
-# vllm#48993 (packed KV group overlays: per-block cost sum(groups) -> max(groups)) and vllm#48317
-# (get_max_concurrency_for_kv_cache_config counted only ONE group's page size, so every concurrency
-# figure we ever recorded was overstated) are the reasons; #48957/#49486/#50004 ride along.
-# v0.26.1rc0 has the first two but is a git tag only — no image is published.
-#
-# vllm#50298 (~1.88x kernel) shipped an early-return warmup branch in
-# models/deepseek_v4/nvidia/flashmla.py asserting `self.topk_indices_buffer is not None`. A DSpark
-# drafter has no indexer buffer, so profile_run died with a bare AssertionError AFTER the full
-# ~32 min weight load (vllm#50615). We pinned below it until vllm#50693 fixed it; that patch is now
-# vendored, so the pin is lifted and #50298/#50312/#49236/#48047 ride along.
-# The fix only helps because our draft layers are SWA-only: compress_ratios has 46 entries for 43
-# hidden layers and the trailing three (the MTP/DSpark layers) are 0, so `swa_only` is True and the
-# assert is never reached. A checkpoint whose draft layers compress would still trip it.
-#
-# ⚠ Nightly tags are pruned (~2 weeks). If a rebuild fails on an unresolvable FROM, that is why —
-# move to the first release tag that is a superset, do not silently pick a newer nightly.
-#
-# Bumping is not a date comparison: vLLM cuts release branches, so a later tag can MISS commits.
-# `gh api repos/vllm-project/vllm/compare/<current>...<target> --jq .status` should say "ahead".
-# If it says "diverged", check whether the behind-by commits are backports that exist on main under
-# different SHAs (they usually are) before treating it as a blocker.
-FROM vllm/vllm-openai:nightly-44fe2a392b71d52a8d72faf2f8278834379482c9
-
-# Exact eleven-commit patch series from upstream vllm#54566 at head
-# 1576a46008f2411ec51391710c8886293f7a580f. This PR changes both Python and the compiled
-# topk_softplus_sqrt operator, so patching site-packages alone would create an ABI mismatch.
-# Rebuild vLLM from the pinned base source, then install it over the stock wheel.
-COPY patches/54566-deepseek-v4-vision.patch /tmp/54566.patch
-RUN --mount=type=secret,id=gha-cache-url \
-    --mount=type=secret,id=gha-runtime-token \
-    set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends cmake cuda-nvrtc-dev-13-0 git ninja-build sccache; \
-    rm -rf /var/lib/apt/lists/*; \
-    test "$(sha256sum /tmp/54566.patch | cut -d' ' -f1)" = "5195c9ab8b345aba32ca9af04b195c9a0641a4521e04df59cfeab68067074f04"; \
-    git clone --filter=blob:none https://github.com/vllm-project/vllm.git /tmp/vllm-src; \
-    git -C /tmp/vllm-src checkout 44fe2a392b71d52a8d72faf2f8278834379482c9; \
-    git -C /tmp/vllm-src apply --check /tmp/54566.patch; \
-    git -C /tmp/vllm-src apply /tmp/54566.patch; \
-    VLLM_DIR="$(cd / && python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; \
-    if [ -s /run/secrets/gha-cache-url ] && [ -s /run/secrets/gha-runtime-token ]; then \
-      export SCCACHE_GHA_ENABLED=true; \
-      export ACTIONS_CACHE_URL="$(cat /run/secrets/gha-cache-url)"; \
-      export ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/gha-runtime-token)"; \
-    fi; \
-    cd /tmp/vllm-src; \
-    cmake -S . -B /tmp/vllm-build -G Ninja \
-      -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-      -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_CUDA_ARCHITECTURES=90 \
-      -DCMAKE_JOB_POOL_COMPILE=compile \
-      -DCMAKE_JOB_POOLS=compile=4 \
-      -DVLLM_PYTHON_EXECUTABLE="$(command -v python3)" \
-      -DVLLM_PYTHON_PATH="$(python3 -c 'import sys; print(":".join(sys.path))')" \
-      -DVLLM_TARGET_DEVICE=cuda; \
-    cmake --build /tmp/vllm-build --target _moe_C_stable_libtorch -j 4; \
-    cp -a vllm/. "$VLLM_DIR/"; \
-    SO="$(find /tmp/vllm-build -type f -name '_moe_C_stable_libtorch*.so' -print -quit)"; \
-    test -n "$SO"; \
-    cp "$SO" "$VLLM_DIR/_moe_C_stable_libtorch.abi3.so"; \
-    rm -rf /tmp/vllm-src /tmp/vllm-build /tmp/54566.patch
+# v0.30.0 contains the production-critical OffloadingConnector bounds fix (vllm#52923),
+# plus the DeepSeek-V4, DSpark, parser, and packed heterogeneous-KV work previously carried by
+# v0.26.0 and later nightlies. Release branches can diverge; verify required behavior with the
+# tripwires below rather than assuming a newer tag is a strict commit superset.
+FROM vllm/vllm-openai:v0.30.0
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -78,7 +15,7 @@ COPY chat-template-fix/chat-template/*.jinja /templates/
 # as every other route here.
 COPY diag/collect_env_route.py /tmp/collect_env_route.py
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; \
     cat /tmp/collect_env_route.py >> "$VLLM_DIR/entrypoints/openai/api_server.py"; \
     rm -f /tmp/collect_env_route.py; \
     python3 -c "import inspect; import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); assert any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in inspect.signature(m.build_app, follow_wrapped=False).parameters.values()), 'wrapped build_app must stay variadic'; print('collect_env route baked OK')"
@@ -101,36 +38,46 @@ assert DSML_PARAM_CLOSE == "</｜DSML｜parameter>", DSML_PARAM_CLOSE
 print("deepseek_v4/v32 engine parsers OK:", r.__module__, "/", t.__module__)
 PY
 
-# The tokenizer was replaced upstream after vllm#46257. Its old add_generation_prompt /
-# continue_final_message patch no longer applies; renderer-level behavior must be exercised through
-# /v1/chat/completions in the GPU acceptance test rather than against the removed encoder API.
+# The deepseek_v4/v32 tokenizer-mode encoders silently ignore add_generation_prompt +
+# continue_final_message without this. Exact source diff from rebased vllm#46257 head
+# 3dd748819f25fa64250258cdb059c5b0e4487563; it also applies cleanly to v0.30.0.
+COPY patches/46257-deepseek-generation-controls-v0.30.patch /tmp/dsv4-genprompt.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/dsv4-genprompt.patch | cut -d' ' -f1)" = "238e8f7b17debf344c87d1ee001a38df6ecbc397df8ee770fbe26f74a108774d"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-genprompt.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dsv4-genprompt.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dsv4-genprompt.patch
+
+# Build-time tripwire: behavioral (pure templating, no GPU) — verifies both params are honored.
 RUN python3 - <<'PY'
-from vllm.tokenizers.deepseek_v4_encoding import encode_messages
-out = encode_messages(
-    [{"role": "user", "content": "hi"}],
-    thinking_mode="thinking",
-    reasoning_effort="max",
+from vllm.tokenizers.deepseek_v4_encoding import (
+    encode_messages, ASSISTANT_SP_TOKEN as A, eos_token as EOS, thinking_end_token as ET,
 )
-assert "hi" in out
-print("deepseek_v4 encoder max-reasoning path OK")
+u = [{"role": "user", "content": "hi"}]
+a = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+assert encode_messages(u, thinking_mode="chat", add_generation_prompt=True).endswith(A + ET)
+assert A not in encode_messages(u, thinking_mode="chat", add_generation_prompt=False)
+assert encode_messages(a, thinking_mode="chat", add_generation_prompt=True).endswith(A + ET)
+c = encode_messages(a, thinking_mode="chat", continue_final_message=True)
+assert c.endswith("yo") and not c.endswith(EOS) and A in c
+print("deepseek add_generation_prompt / continue_final_message honored OK")
 PY
 
-# vllm#48748 (a reply that never emits </think> leaves the EOS token in reasoning_content) is IN
-# THIS BASE, so the vendored patch is gone. The tripwire stays as a regression check on the base:
-# the symbols must still exist (so an upstream rename fails here instead of passing vacuously) and
-# the DROP_TERMINAL branch must not gate on skip_tool_parsing. Source-level, not behavioral —
-# driving the parser needs vLLM's test fixtures (MockTokenizer et al), absent from the runtime image.
+# vllm#48748 is upstream in v0.30.0. Keep the source-level regression tripwire: terminal drops
+# must happen independently of tool parsing so EOS cannot leak into reasoning_content.
 RUN python3 - <<'PY'
 import inspect, re
 from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 cls_src = inspect.getsource(StreamingParserEngine)
 fn_src = inspect.getsource(StreamingParserEngine._on_terminal)
-assert "skip_tool_parsing" in cls_src, "symbol gone — re-check whether vllm#48748 still applies"
+assert "skip_tool_parsing" in cls_src, "symbol gone — re-check vllm#48748"
 assert "DROP_TERMINAL" in fn_src, fn_src
 branch = re.search(r"if[^:]*DROP_TERMINAL[^:]*:", fn_src, re.S)
 assert branch, fn_src
 assert "skip_tool_parsing" not in branch.group(0), branch.group(0)
-print("EOS-in-reasoning fix (vllm#48748) present in base OK")
+print("EOS-in-reasoning fix (vllm#48748) present upstream")
 PY
 
 # Qwen's DFlash drafter mixes sliding + full attention, which only the V2 model runner can do
@@ -148,10 +95,20 @@ import vllm.model_executor.models.qwen3_dflash  # noqa: F401
 print("hybrid-SWA DFlash prereqs OK")
 PY
 
-# DSpark needs a checkpoint that ships the drafter (deepseek-ai/DeepSeek-V4-Flash-0731; the separate
-# -DSpark repo it replaced is retired) + cudagraphs (no --enforce-eager). num_speculative_tokens must
-# be >= config.json's dspark_block_size (5) — below it the block drafter emits GARBLED text, not just
-# lower acceptance. Leave draft_sample_method default — probabilistic degrades into loops.
+# vllm#52923 prevents OffloadingConnector store scheduling from outrunning either allocated GPU
+# chunks or available offload keys. This is the exact invariant that crashed the v0.26.0 engine.
+RUN python3 - <<'PY'
+import inspect
+from vllm.distributed.kv_transfer.kv_connector.v1.offloading.scheduler import RequestOffloadState
+src = inspect.getsource(RequestOffloadState.storable_chunks)
+assert "num_allocated_chunks" in src, src
+assert "num_keyed_chunks" in src, src
+assert "return min(num_chunks, num_allocated_chunks, num_keyed_chunks)" in src, src
+print("OffloadingConnector chunk bounds fix (vllm#52923) present")
+PY
+
+# DSpark needs the DSpark checkpoint (deepseek-ai/DeepSeek-V4-Flash-DSpark) + cudagraphs (no
+# --enforce-eager); leave draft_sample_method default — probabilistic degrades into loops.
 # Tripwire: a bump that drops DSpark fails HERE. Does NOT prove the Hopper kernels lower or that
 # acceptance is good — both need GPU + the checkpoint.
 RUN python3 - <<'PY'
@@ -162,31 +119,6 @@ import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401
 import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
 print("DSpark OK:", vllm.__version__)
 PY
-
-# Exact-PR tripwire: verifies the model and dedicated processor from vllm#54566 survived all
-# subsequent PCAI overlays.
-RUN python3 - <<'PY'
-from typing import get_type_hints
-
-import torch
-import vllm._custom_ops  # noqa: F401 - loads the native MoE extension
-from vllm.model_executor.models.registry import ModelRegistry
-from vllm.models.deepseek_v4.common.mm_preprocess import (
-    DeepseekV4VLProcessingInfo,
-    DeepseekV4VLProcessor,
-)
-from vllm.models.deepseek_v4.nvidia.vl_model import (
-    DeepseekV4ForConditionalGeneration,
-)
-arch = "DeepseekV4ForConditionalGeneration"
-assert arch in ModelRegistry.get_supported_archs(), arch
-assert callable(DeepseekV4VLProcessor)
-assert get_type_hints(DeepseekV4VLProcessingInfo.get_hf_processor)["return"].__name__ == "DeepseekV4VLProcessor"
-schema = torch.ops._moe_C.topk_softplus_sqrt.default._schema
-assert len(schema.arguments) == 12, schema
-print("exact vllm#54566 Vision model, processor, and MoE ABI registered OK")
-PY
-
 # With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
 # config-only cache dir (json/py/model, never safetensors) and keeps the URL in `model_weights`.
 # Drafters that live INSIDE the target checkpoint (DSpark, MTP) are built from the rewritten path
@@ -195,7 +127,7 @@ PY
 # because it is still open. Drop once the base carries it — the apply below will fail loudly.
 COPY patches/48023-spec-draft-inherit-model-weights.patch /tmp/spec-draft-weights.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/spec-draft-weights.patch; \
     else patch -p1 -d "$SITE" < /tmp/spec-draft-weights.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
@@ -240,7 +172,7 @@ PY
 # to bound shm usage, so one call site ignoring it is a bug.
 COPY patches/mq-worker-response-honour-chunk-bytes.patch /tmp/mq-chunk.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/mq-chunk.patch; \
     else patch -p1 -d "$SITE" < /tmp/mq-chunk.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
@@ -294,7 +226,7 @@ PY
 # quote inside a tool-call header, which the parser then reads as a garbage tool name.
 COPY patches/50686-merge-consecutive-assistant-messages.patch /tmp/dsv4-consec.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n 1)"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-consec.patch; \
     else patch -p1 -d "$SITE" < /tmp/dsv4-consec.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
