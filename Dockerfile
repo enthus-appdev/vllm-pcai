@@ -118,3 +118,141 @@ import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401
 import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
 print("DSpark OK:", vllm.__version__)
 PY
+# With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
+# config-only cache dir (json/py/model, never safetensors) and keeps the URL in `model_weights`.
+# Drafters that live INSIDE the target checkpoint (DSpark, MTP) are built from the rewritten path
+# and inherit an empty `model_weights`, so the drafter load dies with "Cannot find any safetensors
+# model weights" AFTER the ~16 min target stream. Upstream vllm#48023 (fixes vllm#42060); vendored
+# because it is still open. Drop once the base carries it — the apply below will fail loudly.
+COPY patches/48023-spec-draft-inherit-model-weights.patch /tmp/spec-draft-weights.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/spec-draft-weights.patch; \
+    else patch -p1 -d "$SITE" < /tmp/spec-draft-weights.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/spec-draft-weights.patch
+
+# Build-time tripwire: behavioral (pure config, no GPU/network). Asserts BOTH directions — a shared
+# checkpoint inherits the object-storage URL, and a drafter that resolved its own is not clobbered.
+RUN python3 - <<'PY'
+from unittest.mock import MagicMock, patch
+from vllm.config import ParallelConfig
+from vllm.config.speculative import SpeculativeConfig
+
+S3, CACHE = "s3://llm-model-cache-std-01/DeepSeek-V4-Flash-0731/", "/root/.cache/vllm/assets/model_streamer/abcd1234"
+
+def build(draft_weights, draft_model):
+    with patch("vllm.config.speculative.ModelConfig") as mc:
+        d = MagicMock(); d.model = draft_model; d.model_weights = draft_weights
+        d.hf_config.model_type = "deepseek_mtp"; d.hf_config.n_predict = None; d.max_model_len = 4096
+        mc.return_value = d
+        t = MagicMock(); t.model = CACHE; t.model_weights = S3
+        t.hf_text_config.model_type = "deepseek_v3"; t.quantization = None; t.max_model_len = 4096
+        try:
+            SpeculativeConfig(method="mtp", num_speculative_tokens=1,
+                              target_model_config=t, target_parallel_config=ParallelConfig())
+        except Exception as e:
+            # These mocks track SpeculativeConfig.__post_init__; a base bump can require more
+            # attributes. That is a stale-tripwire failure, NOT evidence the patch is unneeded.
+            raise SystemExit(f"tripwire mocks no longer match this base ({type(e).__name__}: {e})"
+                             " — update the mocks, do NOT drop the patch") from e
+        return d.model_weights
+
+assert build("", CACHE) == S3, "shared-checkpoint drafter did not inherit model_weights"
+assert build("s3://other/drafter/", CACHE) == "s3://other/drafter/", "clobbered a drafter's own weights"
+print("spec-draft model_weights inheritance OK")
+PY
+
+# PCAI fixes /dev/shm at 64 MiB and exposes no way to change it (that needs an emptyDir volume,
+# which PCAI forbids). vllm#48879 added check_shm_free_space, which now refuses to over-commit —
+# correct, but fatal here: MessageQueue's rpc_broadcast_mq honours VLLM_MQ_MAX_CHUNK_BYTES_MB while
+# worker_response_mq (created once PER WORKER) hardcodes the 24 MiB default, so TP=2 needs
+# 2 x 240 MiB no matter what the env var says. Not filed upstream yet; the env var plainly intends
+# to bound shm usage, so one call site ignoring it is a bug.
+COPY patches/mq-worker-response-honour-chunk-bytes.patch /tmp/mq-chunk.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/mq-chunk.patch; \
+    else patch -p1 -d "$SITE" < /tmp/mq-chunk.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/mq-chunk.patch
+
+# 1 MiB x 10 chunks: rpc 10 MiB + one 10 MiB response queue per worker = 30 MiB at TP=2, inside the
+# 64 MiB PCAI allows. The 24 MiB default exists for grammar bitmasks at 1024 requests; we serve
+# max-num-seqs 4 (~32 KiB), and an oversized message degrades to a local socket rather than failing.
+# Override per-deployment if a model ever needs bigger messages AND has the shm for them.
+ENV VLLM_MQ_MAX_CHUNK_BYTES_MB=1
+
+# Tripwire: both queue call sites must honour the env var, or a small-/dev/shm host dies at boot
+# after the (very long) weight load. Source-level — constructing a real MessageQueue needs shm.
+RUN python3 - <<'PY'
+import inspect, re
+from vllm.v1.executor import multiproc_executor as m
+src = inspect.getsource(m)
+sites = re.findall(r"MessageQueue\((?!\s*\)).*?\)", src, re.S)
+assert sites, "no MessageQueue(...) construction found — upstream refactor, re-check the patch"
+bare = [s for s in sites if "max_chunk_bytes" not in s]
+assert not bare, f"MessageQueue built without max_chunk_bytes: {bare}"
+import vllm.envs as envs
+assert envs.VLLM_MQ_MAX_CHUNK_BYTES_MB == 1, envs.VLLM_MQ_MAX_CHUNK_BYTES_MB
+print("all MessageQueue sites honour VLLM_MQ_MAX_CHUNK_BYTES_MB OK")
+PY
+
+# vllm#50693 is in this base. Keep the source tripwire: a DSpark drafter has no indexer buffer, so
+# the SWA-only warmup path must be selected before that buffer is touched.
+RUN python3 - <<'PY'
+import inspect
+from vllm.models.deepseek_v4.nvidia import flashmla
+src = inspect.getsource(flashmla)
+marker = "if attn_metadata is None:"
+assert marker in src, "warmup branch gone — re-read forward_mqa before trusting this patch"
+warmup = "\n".join(src[src.index(marker):].split("\n")[:35])
+guard = warmup.find("if swa_only:")
+assert guard != -1, "swa_only guard missing from the warmup branch -> vllm#50693 not applied"
+first_assert = warmup.find("assert self.topk_indices_buffer is not None")
+assert first_assert == -1 or first_assert > guard, (
+    "warmup branch asserts on topk_indices_buffer BEFORE the swa_only guard: a DSpark drafter "
+    "would die in profile_run after the full weight load (vllm#50615)"
+)
+print("flashmla warmup branch is DSpark-safe OK")
+PY
+
+# Clients that replay one assistant turn as two consecutive assistant messages (a content-only
+# preamble, then a tool_calls + reasoning message) get a malformed prompt: the encoder emits the
+# Assistant transition only after user/developer messages, so the second message is glued on with a
+# stray <｜end▁of▁sentence｜> mid-turn and its reasoning renders as free text closed by an orphan
+# </think>. The model imitates the unbalanced markup and emits stray </｜DSML｜tool_calls> or drops a
+# quote inside a tool-call header, which the parser then reads as a garbage tool name.
+COPY patches/50686-merge-consecutive-assistant-messages.patch /tmp/dsv4-consec.patch
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-consec.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dsv4-consec.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dsv4-consec.patch
+
+# Tripwire: functional, not source-level — the encoder is dependency-free, so we can render a split
+# turn and assert the prompt is well-formed. Catches both a dropped patch and an upstream rewrite
+# that reintroduces the bug.
+RUN python3 - <<'PY'
+from vllm.tokenizers import deepseek_v4_encoding as enc
+
+msgs = [
+    {"role": "user", "content": "check server status"},
+    {"role": "assistant", "content": "Let me check the server status."},
+    {"role": "assistant", "reasoning": "The user wants a health check.",
+     "tool_calls": [{"id": "c1", "type": "function",
+                     "function": {"name": "bash", "arguments": '{"command": "uptime"}'}}]},
+    {"role": "tool", "tool_call_id": "c1", "content": "up 3 days"},
+]
+out = enc.encode_messages(msgs, thinking_mode="thinking", drop_thinking=False)
+
+canonical = ("<｜Assistant｜><think>The user wants a health check.</think>"
+             "Let me check the server status.\n\n<｜DSML｜tool_calls>")
+assert canonical in out, f"split assistant turn not merged (vllm#50686):\n{out}"
+# Only the trailing generation prompt may leave a <think> unclosed.
+assert out.count("<think>") - 1 == out.count("</think>"), f"unbalanced think tags:\n{out}"
+# A merged turn ends once; a stray mid-turn EOS is the original bug.
+assert out.count("<｜end▁of▁sentence｜>") == 1, f"stray mid-turn EOS:\n{out}"
+print("deepseek_v4 encoder merges split assistant turns OK")
+PY

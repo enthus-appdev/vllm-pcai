@@ -10,7 +10,7 @@ PCAI cannot mount volumes through its UI, so anything a model needs at runtime t
 
 2. **Diagnostics endpoint** — `GET /collect_env` on the serving port (same bearer-gate) so PCAI's shell-less pods can still report versions, GPU topology, and env vars.
 
-3. **Vendored parser patch** — the `deepseek_v4` `add_generation_prompt` / `continue_final_message` honor fix ([#46257](https://github.com/vllm-project/vllm/pull/46257), still open upstream), forward-ported to the v0.30.0 tokenizer. The former EOS-in-`reasoning_content` patch ([#48748](https://github.com/vllm-project/vllm/pull/48748)) is now upstream and retained as a build-time regression assertion only.
+3. **Vendored patches** — the `deepseek_v4` generation-control fix ([#46257](https://github.com/vllm-project/vllm/pull/46257), forward-ported to v0.30.0), the speculative drafter weight-source fix ([#48023](https://github.com/vllm-project/vllm/pull/48023)), the consecutive-assistant-message fix ([#50686](https://github.com/vllm-project/vllm/pull/50686)), and PCAI's `/dev/shm` queue-size fix. The former EOS reasoning-leak patch ([#48748](https://github.com/vllm-project/vllm/pull/48748)) is upstream and retained as a regression assertion only.
 
 4. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
 
@@ -33,7 +33,7 @@ vllm-pcai/
 │                               + Build-time tripwires for all three models
 ├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
 ├── diag/                     # collect_env_route.py
-├── patches/                  # #46257 generation controls forward-port for v0.30.0
+├── patches/                  # v0.30.0-compatible parser, drafter, and PCAI queue fixes
 └── .dockerignore
 ```
 
