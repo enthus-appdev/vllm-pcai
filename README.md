@@ -18,7 +18,7 @@ PCAI cannot mount volumes through its UI, so anything a model needs at runtime t
 
 The `FROM` is the **`v0.30.0` release**. It retains the streaming ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, and packed heterogeneous-KV support used by PCAI. It also includes [#52923](https://github.com/vllm-project/vllm/pull/52923), which bounds OffloadingConnector store work by both allocated GPU chunks and available offload keys; v0.26.0 could violate that invariant and terminate EngineCore under live traffic.
 
-The DeepSeek V4 DSpark external-cache lookup defect remains open upstream in [#47890](https://github.com/vllm-project/vllm/issues/47890). Proposed fixes [#47891](https://github.com/vllm-project/vllm/pull/47891) and [#48459](https://github.com/vllm-project/vllm/pull/48459) predate v0.30.0, overlap, and do not apply cleanly to its evolved KV scheduler. They are deliberately **not** carried as an unreviewed conflict resolution. Keep native CPU KV offloading disabled for DSpark until upstream rebases/merges the fix or an exact, tested v0.30.0 backport is available.
+The DeepSeek V4 DSpark external-cache lookup defect remains open upstream in [#47890](https://github.com/vllm-project/vllm/issues/47890). This experimental branch carries a reviewed v0.30.0 backport of [#47891](https://github.com/vllm-project/vllm/pull/47891), including its overlapping core behavior from [#48459](https://github.com/vllm-project/vllm/pull/48459); #48459 is therefore not stacked separately. This is not production approval: enable native CPU KV offloading only in a controlled experiment and require nonzero CPU→GPU bytes, nonzero external hits, improved revisit TTFT, and zero EngineCore restarts before promotion.
 
 **Bumping is not a date comparison.** vLLM cuts release branches, so validate required behavior with the Dockerfile tripwires and GPU workloads rather than relying only on release dates or commit ancestry.
 
@@ -33,7 +33,8 @@ vllm-pcai/
 │                               + Build-time tripwires for all three models
 ├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
 ├── diag/                     # collect_env_route.py
-├── patches/                  # v0.30.0-compatible parser, drafter, and PCAI queue fixes
+├── patches/                  # v0.30.0-compatible parser, drafter, PCAI queue,
+│                             # and experimental DSpark offload-cache fixes
 └── .dockerignore
 ```
 

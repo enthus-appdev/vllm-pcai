@@ -257,3 +257,40 @@ assert out.count("<think>") - 1 == out.count("</think>"), f"unbalanced think tag
 assert out.count("<｜end▁of▁sentence｜>") == 1, f"stray mid-turn EOS:\n{out}"
 print("deepseek_v4 encoder merges split assistant turns OK")
 PY
+
+# EXPERIMENTAL: v0.30.0 backport of the still-open vllm#47891 DSpark external-cache
+# lookup fix. The upstream PR includes the core changes from vllm#48459 plus the
+# OffloadingConnector integration; do not stack #48459 separately. Remove this
+# backport when upstream ships an equivalent release.
+COPY patches/47891-dspark-offload-cache-v0.30.patch /tmp/dspark-offload-cache.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/dspark-offload-cache.patch | cut -d' ' -f1)" = "fd8c8609c6327610a47172f98926b2adb55d5f7968dd79359eaae28812e25981"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dspark-offload-cache.patch; \
+    else patch -p1 -d "$SITE" < /tmp/dspark-offload-cache.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/dspark-offload-cache.patch
+
+# Source-level tripwire for both halves of the backport: DSpark's ephemeral draft
+# group is marked veto-exempt, and the offload scheduler carries exclusions through
+# lookup into load scheduling. GPU validation must still prove actual CPU->GPU hits.
+RUN python3 - <<'PY'
+import inspect
+from vllm.config.speculative import SpeculativeConfig
+from vllm.distributed.kv_transfer.kv_connector.v1.offloading.scheduler import (
+    GroupOffloadConfig,
+    OffloadingConnectorScheduler,
+    RequestOffloadState,
+)
+from vllm.v1.kv_cache_interface import KVCacheGroupSpec
+
+assert SpeculativeConfig.has_ephemeral_draft_context
+assert "dspark" in inspect.getsource(SpeculativeConfig.has_ephemeral_draft_context)
+assert "eagle_group_is_veto_exempt" in KVCacheGroupSpec.__dataclass_fields__
+assert "eagle_group_is_veto_exempt" in GroupOffloadConfig._fields
+assert "lookup_excluded_groups" in RequestOffloadState.__dataclass_fields__
+scheduler_src = inspect.getsource(OffloadingConnectorScheduler)
+assert "excluded_groups.add" in scheduler_src
+assert scheduler_src.count("lookup_excluded_groups") >= 3
+print("experimental DSpark offload-cache veto exemption present")
+PY
