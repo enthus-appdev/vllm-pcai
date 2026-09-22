@@ -39,10 +39,11 @@ print("deepseek_v4/v32 engine parsers OK:", r.__module__, "/", t.__module__)
 PY
 
 # The deepseek_v4/v32 tokenizer-mode encoders silently ignore add_generation_prompt +
-# continue_final_message without this. This is the vllm#46257 change forward-ported to v0.30.0;
-# drop it when the upstream PR lands.
+# continue_final_message without this. Exact source diff from rebased vllm#46257 head
+# 3dd748819f25fa64250258cdb059c5b0e4487563; it also applies cleanly to v0.30.0.
 COPY patches/46257-deepseek-generation-controls-v0.30.patch /tmp/dsv4-genprompt.patch
 RUN set -eux; \
+    test "$(sha256sum /tmp/dsv4-genprompt.patch | cut -d' ' -f1)" = "238e8f7b17debf344c87d1ee001a38df6ecbc397df8ee770fbe26f74a108774d"; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-genprompt.patch; \
     else patch -p1 -d "$SITE" < /tmp/dsv4-genprompt.patch; fi; \

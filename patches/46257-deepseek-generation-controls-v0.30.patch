@@ -1,8 +1,8 @@
 diff --git a/vllm/tokenizers/deepseek_v4.py b/vllm/tokenizers/deepseek_v4.py
-index 2a0db21..f7bd218 100644
+index 532ca0df7c..7f5215e089 100644
 --- a/vllm/tokenizers/deepseek_v4.py
 +++ b/vllm/tokenizers/deepseek_v4.py
-@@ -57,6 +57,8 @@ def get_deepseek_v4_tokenizer(tokenizer: HfTokenizer) -> HfTokenizer:
+@@ -65,6 +65,8 @@ def get_deepseek_v4_tokenizer(tokenizer: HfTokenizer) -> HfTokenizer:
                  thinking_mode=thinking_mode,
                  drop_thinking=kwargs.get("drop_thinking", True),
                  reasoning_effort=reasoning_effort,
@@ -12,7 +12,7 @@ index 2a0db21..f7bd218 100644
  
              prompt_str = encode_messages(messages, **encode_config)  # type: ignore
 diff --git a/vllm/tokenizers/deepseek_v4_encoding.py b/vllm/tokenizers/deepseek_v4_encoding.py
-index fb5bc44..51e3d44 100644
+index 37dc559366..8842201e06 100644
 --- a/vllm/tokenizers/deepseek_v4_encoding.py
 +++ b/vllm/tokenizers/deepseek_v4_encoding.py
 @@ -234,6 +234,8 @@ def render_message(
@@ -35,7 +35,7 @@ index fb5bc44..51e3d44 100644
  
      if tools:
          tools = tools_from_openai_format(tools)
-@@ -422,14 +426,23 @@ def render_message(
+@@ -422,14 +426,19 @@ def render_message(
              or messages[index + 1].get("role") == "assistant"
          )
      ):
@@ -50,11 +50,7 @@ index fb5bc44..51e3d44 100644
 +            else:
 +                prompt += thinking_end_token
 +
-+    elif (
-+        add_generation_prompt
-+        and index + 1 == len(messages)
-+        and role == "assistant"
-+    ):
++    elif add_generation_prompt and index + 1 == len(messages) and role == "assistant":
          prompt += ASSISTANT_SP_TOKEN
 -        if not drop_thinking and thinking_mode == "thinking":
 -            prompt += thinking_start_token
@@ -66,7 +62,7 @@ index fb5bc44..51e3d44 100644
  
      return prompt
  
-@@ -552,6 +565,8 @@ def encode_messages(
+@@ -552,6 +561,8 @@ def encode_messages(
      drop_thinking: bool = True,
      add_default_bos_token: bool = True,
      reasoning_effort: Optional[str] = None,
@@ -75,7 +71,7 @@ index fb5bc44..51e3d44 100644
  ) -> str:
      """
      Encode a list of messages into the DeepSeek-V4 prompt format.
-@@ -575,6 +590,13 @@ def encode_messages(
+@@ -575,6 +586,13 @@ def encode_messages(
      Returns:
          The encoded prompt string.
      """
@@ -89,7 +85,7 @@ index fb5bc44..51e3d44 100644
      context = context if context else []
  
      # Preprocess: merge tool messages and sort tool results
-@@ -613,6 +635,8 @@ def encode_messages(
+@@ -613,6 +631,8 @@ def encode_messages(
              drop_thinking=effective_drop_thinking,
              reasoning_effort=reasoning_effort,
              last_user_idx=last_user_idx,
