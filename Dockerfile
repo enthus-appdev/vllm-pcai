@@ -1,11 +1,10 @@
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
-# v0.26.0 is the first RELEASE carrying everything we previously needed nightlies for: the engine
-# streaming parsers (qwen3/gemma4/deepseek_v4), DFlash incl. hybrid SWA+full drafters (vllm#47914 —
-# z-lab/Qwen3.6-27B-DFlash is 4-of-5 sliding, so this is required, not optional), and DeepSeek-V4
-# DSpark. Before bumping, verify the target tag is a superset of this one — vLLM cuts release
-# branches, so a later tag can MISS commits present here (compare/<sha>...<tag> must say "ahead").
-FROM vllm/vllm-openai:v0.26.0
+# v0.30.0 contains the production-critical OffloadingConnector bounds fix (vllm#52923),
+# plus the DeepSeek-V4, DSpark, parser, and packed heterogeneous-KV work previously carried by
+# v0.26.0 and later nightlies. Release branches can diverge; verify required behavior with the
+# tripwires below rather than assuming a newer tag is a strict commit superset.
+FROM vllm/vllm-openai:v0.30.0
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -16,7 +15,7 @@ COPY chat-template-fix/chat-template/*.jinja /templates/
 # as every other route here.
 COPY diag/collect_env_route.py /tmp/collect_env_route.py
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; \
     cat /tmp/collect_env_route.py >> "$VLLM_DIR/entrypoints/openai/api_server.py"; \
     rm -f /tmp/collect_env_route.py; \
     python3 -c "import inspect; import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); assert any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in inspect.signature(m.build_app, follow_wrapped=False).parameters.values()), 'wrapped build_app must stay variadic'; print('collect_env route baked OK')"
@@ -40,10 +39,11 @@ print("deepseek_v4/v32 engine parsers OK:", r.__module__, "/", t.__module__)
 PY
 
 # The deepseek_v4/v32 tokenizer-mode encoders silently ignore add_generation_prompt +
-# continue_final_message without this. Vendored; drop once upstream (vllm#46257) lands in the base.
-COPY patches/deepseek-add-gen-prompt-on-nightly.patch /tmp/dsv4-genprompt.patch
+# continue_final_message without this. This is the vllm#46257 change forward-ported to v0.30.0;
+# drop it when the upstream PR lands.
+COPY patches/46257-deepseek-generation-controls-v0.30.patch /tmp/dsv4-genprompt.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-genprompt.patch; \
     else patch -p1 -d "$SITE" < /tmp/dsv4-genprompt.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
@@ -64,33 +64,19 @@ assert c.endswith("yo") and not c.endswith(EOS) and A in c
 print("deepseek add_generation_prompt / continue_final_message honored OK")
 PY
 
-# Without this, a reply that never emits </think> leaves the EOS token in reasoning_content
-# (generation ends in the parser's REASONING state). vllm#48748 merged 2026-07-22 but landed
-# AFTER the v0.26.0 branch cut, so the release tag does not have it. Drop at v0.27.0 — the
-# apply below will fail loudly once the base carries it.
-COPY patches/48748-eos-reasoning-leak-on-v0.26.0.patch /tmp/dsv4-eos.patch
-RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/dsv4-eos.patch; \
-    else patch -p1 -d "$SITE" < /tmp/dsv4-eos.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/dsv4-eos.patch
-
-# Tripwire asserts BOTH directions: the symbols must still exist (so an upstream rename fails
-# here instead of passing vacuously), and the DROP_TERMINAL branch must no longer gate on
-# skip_tool_parsing. Source-level, not behavioral — driving the parser needs vLLM's test
-# fixtures (MockTokenizer et al), which are not in the runtime image.
+# vllm#48748 is upstream in v0.30.0. Keep the source-level regression tripwire: terminal drops
+# must happen independently of tool parsing so EOS cannot leak into reasoning_content.
 RUN python3 - <<'PY'
 import inspect, re
 from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 cls_src = inspect.getsource(StreamingParserEngine)
 fn_src = inspect.getsource(StreamingParserEngine._on_terminal)
-assert "skip_tool_parsing" in cls_src, "symbol gone — re-check whether vllm#48748 still applies"
+assert "skip_tool_parsing" in cls_src, "symbol gone — re-check vllm#48748"
 assert "DROP_TERMINAL" in fn_src, fn_src
 branch = re.search(r"if[^:]*DROP_TERMINAL[^:]*:", fn_src, re.S)
 assert branch, fn_src
 assert "skip_tool_parsing" not in branch.group(0), branch.group(0)
-print("EOS-in-reasoning fix (vllm#48748) applied OK")
+print("EOS-in-reasoning fix (vllm#48748) present upstream")
 PY
 
 # Qwen's DFlash drafter mixes sliding + full attention, which only the V2 model runner can do
@@ -106,6 +92,18 @@ assert hasattr(VllmConfig, "_dflash_needs_multi_kv_group")
 assert "kv_cache_dtype" in SpeculativeConfig.__annotations__, SpeculativeConfig.__annotations__
 import vllm.model_executor.models.qwen3_dflash  # noqa: F401
 print("hybrid-SWA DFlash prereqs OK")
+PY
+
+# vllm#52923 prevents OffloadingConnector store scheduling from outrunning either allocated GPU
+# chunks or available offload keys. This is the exact invariant that crashed the v0.26.0 engine.
+RUN python3 - <<'PY'
+import inspect
+from vllm.distributed.kv_transfer.kv_connector.v1.offloading.scheduler import RequestOffloadState
+src = inspect.getsource(RequestOffloadState.storable_chunks)
+assert "num_allocated_chunks" in src, src
+assert "num_keyed_chunks" in src, src
+assert "return min(num_chunks, num_allocated_chunks, num_keyed_chunks)" in src, src
+print("OffloadingConnector chunk bounds fix (vllm#52923) present")
 PY
 
 # DSpark needs the DSpark checkpoint (deepseek-ai/DeepSeek-V4-Flash-DSpark) + cudagraphs (no

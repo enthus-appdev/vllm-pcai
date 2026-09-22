@@ -10,32 +10,30 @@ PCAI cannot mount volumes through its UI, so anything a model needs at runtime t
 
 2. **Diagnostics endpoint** — `GET /collect_env` on the serving port (same bearer-gate) so PCAI's shell-less pods can still report versions, GPU topology, and env vars.
 
-3. **Vendored parser patches** — upstream fixes the base image does not carry yet. Currently two: the `deepseek_v4` `add_generation_prompt` / `continue_final_message` honor fix ([#46257](https://github.com/vllm-project/vllm/pull/46257), still open upstream), and the EOS-in-`reasoning_content` leak fix ([#48748](https://github.com/vllm-project/vllm/pull/48748) — **merged**, but after the `v0.26.0` branch cut, so the release tag lacks it; drop at v0.27.0). Previously carried and now merged: `#45877`, `#46995`, `#46875`.
+3. **Vendored parser patch** — the `deepseek_v4` `add_generation_prompt` / `continue_final_message` honor fix ([#46257](https://github.com/vllm-project/vllm/pull/46257), still open upstream), forward-ported to the v0.30.0 tokenizer. The former EOS-in-`reasoning_content` patch ([#48748](https://github.com/vllm-project/vllm/pull/48748)) is now upstream and retained as a build-time regression assertion only.
 
 4. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
 
-## Base image: `v0.26.0`
+## Base image: `v0.30.0`
 
-The `FROM` is the **`v0.26.0` release**. This image rode pinned `cu129` nightlies from June through July because each capability it needs landed after a tag: the streaming **ParserEngine** (#45413 / #45588 / #45877) so DFlash's large multi-token drafts don't corrupt streaming tool calls in agents; **DFlash** core (#43445) plus **hybrid SWA + full-attention drafters** (#47914); and **DeepSeek-V4 DSpark** (#46995). `v0.26.0` is the first release carrying all of it.
+The `FROM` is the **`v0.30.0` release**. It retains the streaming ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, and packed heterogeneous-KV support used by PCAI. It also includes [#52923](https://github.com/vllm-project/vllm/pull/52923), which bounds OffloadingConnector store work by both allocated GPU chunks and available offload keys; v0.26.0 could violate that invariant and terminate EngineCore under live traffic.
 
-**Bumping is not a date comparison.** vLLM cuts release branches, so a later tag can be *missing* commits present in an earlier nightly — #47914 merged 2026-07-08 yet is absent from `v0.25.0` (tagged 07-11). Before any bump, verify the target is a superset:
+The DeepSeek V4 DSpark external-cache lookup defect remains open upstream in [#47890](https://github.com/vllm-project/vllm/issues/47890). Proposed fixes [#47891](https://github.com/vllm-project/vllm/pull/47891) and [#48459](https://github.com/vllm-project/vllm/pull/48459) predate v0.30.0, overlap, and do not apply cleanly to its evolved KV scheduler. They are deliberately **not** carried as an unreviewed conflict resolution. Keep native CPU KV offloading disabled for DSpark until upstream rebases/merges the fix or an exact, tested v0.30.0 backport is available.
 
-```bash
-gh api repos/vllm-project/vllm/compare/<current-sha-or-tag>...<new-tag> --jq .status   # want: "ahead"
-```
+**Bumping is not a date comparison.** vLLM cuts release branches, so validate required behavior with the Dockerfile tripwires and GPU workloads rather than relying only on release dates or commit ancestry.
 
 ## Layout
 
 ```
 vllm-pcai/
-├── Dockerfile                # FROM vllm/vllm-openai:v0.26.0
+├── Dockerfile                # FROM vllm/vllm-openai:v0.30.0
 │                               + Qwen enhanced templates
 │                               + /collect_env diagnostics route
 │                               + DeepSeek V4 parser patches
 │                               + Build-time tripwires for all three models
 ├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
 ├── diag/                     # collect_env_route.py
-├── patches/                  # deepseek-add-gen-prompt-on-nightly.patch (#46257)
+├── patches/                  # #46257 generation controls forward-port for v0.30.0
 └── .dockerignore
 ```
 
