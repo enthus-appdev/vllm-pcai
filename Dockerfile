@@ -4,7 +4,7 @@
 # plus the DeepSeek-V4, DSpark, parser, and packed heterogeneous-KV work previously carried by
 # v0.26.0 and later nightlies. Release branches can diverge; verify required behavior with the
 # tripwires below rather than assuming a newer tag is a strict commit superset.
-FROM vllm/vllm-openai:v0.30.0
+FROM vllm/vllm-openai:v0.31.0
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
