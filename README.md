@@ -8,15 +8,15 @@ PCAI cannot mount volumes through its UI, so anything a model needs at runtime t
 
 1. **Enhanced chat templates** — Qwen3.5/3.6 hardened templates (hidden historical reasoning, XML tool-call formatting, proper ` response` handling) from [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image. (Gemma 4 uses vLLM's **in-image** template at `/vllm-workspace/examples/tool_chat_template_gemma4.jinja`.)
 
-2. **Diagnostics endpoint** — `GET /collect_env` on the serving port (same bearer-gate) so PCAI's shell-less pods can still report versions, GPU topology, and env vars.
+2. **Diagnostics endpoint** — `GET /collect_env` on the serving port so PCAI's shell-less pods can still report versions, GPU topology, and env vars. ⚠️ **Currently broken (404) in v0.30.0+ images:** v0.30.0 moved the ASGI bootstrap into `vllm.entrypoints.launchers.app` (`build_app`), but this image's wrapper still patches the deprecated `openai.api_server` shim, so the route never registers. Fix: retarget `diag/collect_env_route.py` + the `Dockerfile` append to `launchers.app`'s `build_app` and harden the tripwire to assert the route appears on the app (see the internal ops repo).
 
 3. **Vendored patches** — the `deepseek_v4` generation-control fix ([#46257](https://github.com/vllm-project/vllm/pull/46257), exact source diff from rebased head `3dd748819f25fa64250258cdb059c5b0e4487563`, cleanly applicable to v0.30.0), the speculative drafter weight-source fix ([#48023](https://github.com/vllm-project/vllm/pull/48023)), the consecutive-assistant-message fix ([#50686](https://github.com/vllm-project/vllm/pull/50686)), and PCAI's `/dev/shm` queue-size fix. The former EOS reasoning-leak patch ([#48748](https://github.com/vllm-project/vllm/pull/48748)) is upstream and retained as a regression assertion only.
 
 4. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
 
-## Base image: `v0.30.0`
+## Base image: `v0.31.0`
 
-The `FROM` is the **`v0.30.0` release**. It retains the streaming ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, and packed heterogeneous-KV support used by PCAI. It also includes [#52923](https://github.com/vllm-project/vllm/pull/52923), which bounds OffloadingConnector store work by both allocated GPU chunks and available offload keys; v0.26.0 could violate that invariant and terminate EngineCore under live traffic.
+The `FROM` is the **`v0.31.0` release** (v0.30.0 is the deployed live image until a v0.31.0 pod is rolled out). v0.30.0+ retains the streaming ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, and packed heterogeneous-KV support used by PCAI. v0.30.0 also includes [#52923](https://github.com/vllm-project/vllm/pull/52923), which bounds OffloadingConnector store work by both allocated GPU chunks and available offload keys; v0.26.0 could violate that invariant and terminate EngineCore under live traffic.
 
 The DeepSeek V4 DSpark external-cache lookup defect remains open upstream in [#47890](https://github.com/vllm-project/vllm/issues/47890). Proposed fixes [#47891](https://github.com/vllm-project/vllm/pull/47891) and [#48459](https://github.com/vllm-project/vllm/pull/48459) predate v0.30.0, overlap, and do not apply cleanly to its evolved KV scheduler. They are deliberately **not** carried as an unreviewed conflict resolution. Keep native CPU KV offloading disabled for DSpark until upstream rebases/merges the fix or an exact, tested v0.30.0 backport is available.
 
@@ -26,9 +26,9 @@ The DeepSeek V4 DSpark external-cache lookup defect remains open upstream in [#4
 
 ```
 vllm-pcai/
-├── Dockerfile                # FROM vllm/vllm-openai:v0.30.0
+├── Dockerfile                # FROM vllm/vllm-openai:v0.31.0
 │                               + Qwen enhanced templates
-│                               + /collect_env diagnostics route
+│                               + /collect_env diagnostics route (broken on v0.30+, fix pending)
 │                               + DeepSeek V4 parser patches
 │                               + Build-time tripwires for all three models
 ├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
