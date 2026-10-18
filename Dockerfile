@@ -22,13 +22,14 @@ RUN set -eux; \
 # Build the actual ASGI app: importing a wrapper on the deprecated shim did not register a route.
 RUN python3 - <<'PY'
 import inspect
+from argparse import Namespace
 from fastapi.testclient import TestClient
 from vllm.entrypoints.launchers.app import build_app
-from vllm.entrypoints.launchers.cli_args import make_arg_parser
-from vllm.utils.argparse_utils import FlexibleArgumentParser
+from vllm.entrypoints.launchers.cli_args import FrontendArgs
 from unittest.mock import patch
 
-args = make_arg_parser(FlexibleArgumentParser()).parse_args([])
+# Frontend defaults avoid instantiating GPU-dependent engine config on the CI runner.
+args = Namespace(**vars(FrontendArgs(root_path="")))
 app = build_app(args, supported_tasks=("generate",))
 route = next(route for route in app.routes if getattr(route, "path", None) == "/collect_env")
 assert not inspect.iscoroutinefunction(route.endpoint)
