@@ -89,8 +89,7 @@ index 16bfa1a99a1b..531c4eb28d8d 100644
      - Thinking mode with optional reasoning content dropping
      - Tool message merging into user messages
      - Multi-turn conversation context
-@@ -504,10 +577,13 @@ def encode_messages(
-     """
+@@ -596,8 +669,11 @@ def encode_messages(
      context = context if context else []
  
 -    # Preprocess: merge tool messages and sort tool results

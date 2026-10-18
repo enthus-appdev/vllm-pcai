@@ -23,7 +23,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # Intentionally minimal: nothing to scan (repo + submodule templates are Apache-2.0); just assert LICENSE exists.
+      - name: Validate vendored patch syntax
+        run: python3 -m unittest discover -s tests -v
+
+      # Repo + submodule templates are Apache-2.0; assert LICENSE exists.
       - name: Verify LICENSE present
         run: |
           test -f LICENSE
