@@ -4,7 +4,7 @@
 # plus the DeepSeek-V4, DSpark, parser, and packed heterogeneous-KV work previously carried by
 # v0.26.0 and later nightlies. Release branches can diverge; verify required behavior with the
 # tripwires below rather than assuming a newer tag is a strict commit superset.
-FROM vllm/vllm-openai:v0.31.0
+FROM vllm/vllm-openai:v0.32.0
 
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
@@ -16,9 +16,29 @@ COPY chat-template-fix/chat-template/*.jinja /templates/
 COPY diag/collect_env_route.py /tmp/collect_env_route.py
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; \
-    cat /tmp/collect_env_route.py >> "$VLLM_DIR/entrypoints/openai/api_server.py"; \
-    rm -f /tmp/collect_env_route.py; \
-    python3 -c "import inspect; import vllm.entrypoints.openai.api_server as m; from vllm.collect_env import get_pretty_env_info; assert hasattr(m, '_pcai_collect_env_wrapper'); assert any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in inspect.signature(m.build_app, follow_wrapped=False).parameters.values()), 'wrapped build_app must stay variadic'; print('collect_env route baked OK')"
+    cat /tmp/collect_env_route.py >> "$VLLM_DIR/entrypoints/launchers/app.py"; \
+    rm -f /tmp/collect_env_route.py
+
+# Build the actual ASGI app: importing a wrapper on the deprecated shim did not register a route.
+RUN python3 - <<'PY'
+import inspect
+from fastapi.testclient import TestClient
+from vllm.entrypoints.launchers.app import build_app
+from vllm.entrypoints.launchers.cli_args import make_arg_parser
+from vllm.utils.argparse_utils import FlexibleArgumentParser
+from unittest.mock import patch
+
+args = make_arg_parser(FlexibleArgumentParser()).parse_args([])
+app = build_app(args, supported_tasks=("generate",))
+route = next(route for route in app.routes if getattr(route, "path", None) == "/collect_env")
+assert not inspect.iscoroutinefunction(route.endpoint)
+with patch("vllm.collect_env.get_pretty_env_info", return_value="pcai-env-test"):
+    response = TestClient(app).get("/collect_env")
+assert response.status_code == 200, response.text
+assert response.text == "pcai-env-test", response.text
+assert response.headers["content-type"].startswith("text/plain")
+print("collect_env route registered and serves diagnostics OK")
+PY
 
 # Tripwire: --reasoning-parser/--tool-call-parser deepseek_v4 depend on the base providing these;
 # a bump that drops or renames them fails HERE. DSML_PARAM_CLOSE guards the streaming close-tag

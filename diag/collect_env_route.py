@@ -1,7 +1,6 @@
 
-# Appended to vllm/entrypoints/openai/api_server.py at build time — that's why `build_app`
-# (referenced at the bottom) is in scope. Wrapped, not patched in place, to survive
-# api_server.py line churn across nightly base bumps.
+# Appended to the active ASGI factory in vllm/entrypoints/launchers/app.py.
+# Wrapping preserves upstream app initialization across base-image updates.
 
 def _pcai_collect_env_wrapper(_orig_build_app):
     from fastapi.responses import PlainTextResponse
