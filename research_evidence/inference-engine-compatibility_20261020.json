@@ -1,0 +1,820 @@
+{
+  "schema_version": 1,
+  "checked_date": "2026-10-20",
+  "research_depth": "exhaustive",
+  "web_discovery_queries": 20,
+  "search_retrieval_rounds": 7,
+  "classification_confidence_percent": 96,
+  "successful_distinct_repository_readmes": 55,
+  "scope": "Documentation/source/issues only. No engine execution or current-appliance compatibility pass.",
+  "hardware_baseline": "Two H100 NVL94GB,SM90; DeepSeek-V4-Flash-0731. Existing observations dated2026-10-18,notremeasured.",
+  "repositories": [
+    {
+      "repository": "aeonmindai/arc",
+      "url": "https://github.com/aeonmindai/arc",
+      "readme_url": "https://github.com/aeonmindai/arc/blob/master/README.md",
+      "readme_blob_sha": "15297bc17951520a995863d57f41a1ab7e977a56",
+      "classification": "Experimental quantized candidate",
+      "finding": "V4 qtip2; A100/H200 observations; 94GB-per-card and two-H100 path unverified. Fork, not upstream mistral.rs."
+    },
+    {
+      "repository": "ai-dynamo/dynamo",
+      "url": "https://github.com/ai-dynamo/dynamo",
+      "readme_url": "https://github.com/ai-dynamo/dynamo/blob/main/README.md",
+      "readme_blob_sha": "cd858780992f7d22a09889656b93d223c2e39663",
+      "classification": "Orchestration/backend layer",
+      "finding": "H100 compatibility and V4 precision/footprint inherit selected SGLang/vLLM/TRT-LLM workers."
+    },
+    {
+      "repository": "alibaba/rtp-llm",
+      "url": "https://github.com/alibaba/rtp-llm",
+      "readme_url": "https://github.com/alibaba/rtp-llm/blob/main/README.md",
+      "readme_blob_sha": "57227c764e266df1564b17a86e2228a218da276e",
+      "classification": "Development watch",
+      "finding": "V4 exists; SM90 routed-expert support proposed by open PR1508; FP8 expansion and two-card fit unresolved."
+    },
+    {
+      "repository": "antirez/ds4",
+      "url": "https://github.com/antirez/ds4",
+      "readme_url": "https://github.com/antirez/ds4/blob/main/README.md",
+      "readme_blob_sha": "287b39cf857694839ebb27d4ced607d9a09be11f",
+      "classification": "Independent CUDA/GGUF candidate",
+      "finding": "V4 Flash and paired CUDA execution documented; Ada/GB10 receipts, no H100-pair receipt."
+    },
+    {
+      "repository": "ashhart/tensorfold",
+      "url": "https://github.com/ashhart/tensorfold",
+      "readme_url": "https://github.com/ashhart/TensorFold/blob/main/README.md",
+      "readme_blob_sha": "7efca45fa311f89eb7c36968cef3a562db779302",
+      "classification": "Native model gate / watch",
+      "finding": "Current README says no release binary serves DeepSeek; legacy Python MLX recipe is not native Hopper proof."
+    },
+    {
+      "repository": "deepseek-ai/deepinfer",
+      "url": "https://github.com/deepseek-ai/deepinfer",
+      "readme_url": "https://github.com/deepseek-ai/DeepInfer/blob/main/README.md",
+      "readme_blob_sha": "7143caadd1258f56295e2c7766889478556836b3",
+      "classification": "Published hardware/model mismatch",
+      "finding": "Current release supports SM100/Ascend950 and V4.1, not SM90/current Flash0731."
+    },
+    {
+      "repository": "deepspeedai/deepspeed",
+      "url": "https://github.com/deepspeedai/deepspeed",
+      "readme_url": "https://github.com/deepspeedai/DeepSpeed/blob/master/README.md",
+      "readme_blob_sha": "9626cf8d3781614e1cd1ae00355296d4ffc2b9aa",
+      "classification": "No verified V4 serving path",
+      "finding": "Training and generic GPU inference capabilities are not a complete V4-0731 SM90 serving implementation; issue hits included training work."
+    },
+    {
+      "repository": "deepspeedai/deepspeed-mii",
+      "url": "https://github.com/deepspeedai/deepspeed-mii",
+      "readme_url": "https://github.com/deepspeedai/DeepSpeed-MII/blob/main/README.md",
+      "readme_blob_sha": "70e3cef09076cbd642e9d98960f42c12835e7f73",
+      "classification": "No V4 evidence found in scan",
+      "finding": "NVIDIA serving engine; README and recorded issue scan did not establish V4-0731 support."
+    },
+    {
+      "repository": "dphnai/sonar",
+      "url": "https://github.com/dphnai/sonar",
+      "readme_url": "https://github.com/dphnAI/sonar/blob/main/README.md",
+      "readme_blob_sha": "e976f0cb20bdaf177aff6e34b74cdc1b61ff749b",
+      "classification": "Alternative vLLM-derived fork",
+      "finding": "Canonical successor to old Aphrodite URL; explicit V4 NVIDIA source and recipes; exact TP2 remains unverified."
+    },
+    {
+      "repository": "efeslab/nanoflow",
+      "url": "https://github.com/efeslab/nanoflow",
+      "readme_url": "https://github.com/efeslab/Nanoflow/blob/Nanoflow-python/README.md",
+      "readme_blob_sha": "e9e4b9cf92d0716470fd8dca59972c8c16db7d89",
+      "classification": "No V4 evidence found in scan",
+      "finding": "NVIDIA throughput-serving research with Llama/Qwen support; README and issue scan did not establish V4."
+    },
+    {
+      "repository": "ericlbuehler/mistral.rs",
+      "url": "https://github.com/ericlbuehler/mistral.rs",
+      "readme_url": "https://github.com/EricLBuehler/mistral.rs/blob/master/README.md",
+      "readme_blob_sha": "1cbd3948112d9999fb7609100c731775f0c81cbe",
+      "classification": "No upstream V4 evidence beyond wishlist",
+      "finding": "H100 support shown for other models; V4 qtip2 artifact requires separate Arc fork."
+    },
+    {
+      "repository": "exo-explore/exo",
+      "url": "https://github.com/exo-explore/exo",
+      "readme_url": "https://github.com/exo-explore/exo/blob/main/README.md",
+      "readme_blob_sha": "04a4d92e2a2dc9056ae19ad7e4c8b76975e9dd1c",
+      "classification": "MLX-backed conditional path",
+      "finding": "V4 MLX model cards/work exist; MLX itself supports CUDA, but exo V4 on H100/TP2 unverified."
+    },
+    {
+      "repository": "flexflow/flexflow-serve",
+      "url": "https://github.com/flexflow/flexflow-serve",
+      "readme_url": "https://github.com/flexflow/flexflow-serve/blob/inference/README.md",
+      "readme_blob_sha": "89456e9ad198115d44f58b84f2acb4f188e36913",
+      "classification": "No V4 evidence found in scan",
+      "finding": "GPU/distributed serving capabilities; no V4 support established by README/issue scan."
+    },
+    {
+      "repository": "fminference/flexllmgen",
+      "url": "https://github.com/fminference/flexllmgen",
+      "readme_url": "https://github.com/FMInference/FlexLLMGen/blob/main/README.md",
+      "readme_blob_sha": "97a36037acd2e6d7c35ca31f90cce88b97080121",
+      "classification": "Historical offload engine; no V4 evidence",
+      "finding": "Canonical archived successor of FlexGen URL; GPU/CPU/disk execution is not V4 architecture support."
+    },
+    {
+      "repository": "foxengine-ai/aphrodite",
+      "url": "https://github.com/foxengine-ai/aphrodite",
+      "readme_url": "https://github.com/FoxEngine-ai/aphrodite/blob/main/README.md",
+      "readme_blob_sha": "853743a81ad94bf96f00f052a404c3ed589f87a6",
+      "classification": "Historical fork; not another candidate family",
+      "finding": "Old Aphrodite-derived repository; no independent current V4/H100 qualification. Do not double-count with Sonar."
+    },
+    {
+      "repository": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp",
+      "readme_url": "https://github.com/ggml-org/llama.cpp/blob/master/README.md",
+      "readme_blob_sha": "a524b3d6a8dafe1b913e8aef2e41b3bed5ae2c02",
+      "classification": "Converted-weight candidate",
+      "finding": "V4 implementation, 0731 template and merged MTP/DSpark; suitable quant/placement and two-H100 working memory unresolved."
+    },
+    {
+      "repository": "ghyathmoussa/rllm",
+      "url": "https://github.com/ghyathmoussa/rllm",
+      "readme_url": "https://github.com/ghyathmoussa/rLLM/blob/main/README.md",
+      "readme_blob_sha": "0fffefe91cd2f3d27d11be50f4607817fdb53769",
+      "classification": "No V4 evidence found in scan",
+      "finding": "Rust CUDA engine with H100-oriented claims; no V4-named model path or positive V4 issue result in bounded scan."
+    },
+    {
+      "repository": "gradienthq/parallax",
+      "url": "https://github.com/gradienthq/parallax",
+      "readme_url": "https://github.com/GradientHQ/parallax/blob/main/README.md",
+      "readme_blob_sha": "56cb1a7b5c174a27a1a0eef4a107f07e71e0b30e",
+      "classification": "Distributed/backend layer",
+      "finding": "Heterogeneous/distributed inference architecture; no standalone V4 SM90 qualification established."
+    },
+    {
+      "repository": "hebo1221/nano-deepseek-v4",
+      "url": "https://github.com/hebo1221/nano-deepseek-v4",
+      "readme_url": "https://github.com/hebo1221/nano-deepseek-v4/blob/main/README.md",
+      "readme_blob_sha": "596c9b0cdc5a6b5dcaff46d9c2d45f64b2c33bb5",
+      "classification": "Reference/conformance implementation",
+      "finding": "Real V4 equations; explicitly not a production FP4/official0731 speculative serving runtime."
+    },
+    {
+      "repository": "huggingface/candle",
+      "url": "https://github.com/huggingface/candle",
+      "readme_url": "https://github.com/huggingface/candle/blob/main/README.md",
+      "readme_blob_sha": "9f9e09d384643c227972151e58817873db9c89b2",
+      "classification": "Prototype lead closed not-planned",
+      "finding": "V4 prototype issue3924 closed not-planned; GPU dtype work remained. Not a released implementation pass."
+    },
+    {
+      "repository": "huggingface/optimum-nvidia",
+      "url": "https://github.com/huggingface/optimum-nvidia",
+      "readme_url": "https://github.com/huggingface/optimum-nvidia/blob/main/README.md",
+      "readme_blob_sha": "86a0fe29d762db224136d31802b9368cc8fd199a",
+      "classification": "TensorRT-related integration",
+      "finding": "No separate V4 engine qualification established; follow the underlying TensorRT runtime/model support."
+    },
+    {
+      "repository": "huggingface/text-generation-inference",
+      "url": "https://github.com/huggingface/text-generation-inference",
+      "readme_url": "https://github.com/huggingface/text-generation-inference/blob/main/README.md",
+      "readme_blob_sha": "0c79c9b26d254b213d2dabbb036a3772684c536b",
+      "classification": "No current V4 path established",
+      "finding": "Historical CUDA serving project; generic supported models do not establish V4 compressed attention/checkpoint support."
+    },
+    {
+      "repository": "huggingface/transformers",
+      "url": "https://github.com/huggingface/transformers",
+      "readme_url": "https://github.com/huggingface/transformers/blob/main/README.md",
+      "readme_blob_sha": "425174b3602b41d7199ac4709b72010d09e24e69",
+      "classification": "Model implementation/framework",
+      "finding": "Official V4 model documentation; optimized SM90 serving, packed-weight placement and TP2 fit require separate evidence."
+    },
+    {
+      "repository": "ikawrakow/ik_llama.cpp",
+      "url": "https://github.com/ikawrakow/ik_llama.cpp",
+      "readme_url": "https://github.com/ikawrakow/ik_llama.cpp/blob/main/README.md",
+      "readme_blob_sha": "03a070681ac9fc4951b3a89a2127d517847ed3ed",
+      "classification": "Converted-weight candidate",
+      "finding": "Merged V4 PR2165, CUDA and TP; exact quant/backend/two-H100 memory qualification missing."
+    },
+    {
+      "repository": "infinitensor/infinilm",
+      "url": "https://github.com/infinitensor/infinilm",
+      "readme_url": "https://github.com/InfiniTensor/InfiniLM/blob/main/README.md",
+      "readme_blob_sha": "37dcf9dbcb0dc0c0d0e738f685c2c1eb08adf817",
+      "classification": "No V4 evidence found in scan",
+      "finding": "Multi-backend inference project; no positive V4 model evidence established by README/issue scan."
+    },
+    {
+      "repository": "intel/ipex-llm",
+      "url": "https://github.com/intel/ipex-llm",
+      "readme_url": "https://github.com/intel/ipex-llm/blob/main/README.md",
+      "readme_blob_sha": "ea7ad89227e34d7f150ed432714a111f2f18a5ec",
+      "classification": "Different accelerator focus / no path established",
+      "finding": "Intel-oriented runtime; no verified NVIDIA H100 V4 execution path in inspected documentation."
+    },
+    {
+      "repository": "internlm/lmdeploy",
+      "url": "https://github.com/internlm/lmdeploy",
+      "readme_url": "https://github.com/InternLM/lmdeploy/blob/main/README.md",
+      "readme_blob_sha": "7e7299c927050dcc748e711acb551ec4b57d5149",
+      "classification": "First-tier native-checkpoint candidate",
+      "finding": "Merged Hopper V4, current packed-FP4 Triton TP path, exact0731 test config; two-H100 fit unverified."
+    },
+    {
+      "repository": "kvcache-ai/ktransformers",
+      "url": "https://github.com/kvcache-ai/ktransformers",
+      "readme_url": "https://github.com/kvcache-ai/ktransformers/blob/main/README.md",
+      "readme_blob_sha": "45e82a955b021163cd2e7743b0cc02e7de5d22b0",
+      "classification": "Hybrid candidate",
+      "finding": "V4 Flash plus KT-Kernel SM90/H100 support; CPU ISA, assigned compute and RAM footprint unresolved."
+    },
+    {
+      "repository": "localai-org/vllm.cpp",
+      "url": "https://github.com/localai-org/vllm.cpp",
+      "readme_url": "https://github.com/localai-org/vllm.cpp/blob/main/README.md",
+      "readme_blob_sha": "f910212b103c1acafd85da29fe5c42f70ab94fc0",
+      "classification": "Experimental independent C++ candidate",
+      "finding": "V4 GGUF runtime proof on GB10; Hopper builds explicitly lack runtime proof; partial EXL3 path."
+    },
+    {
+      "repository": "lyogavin/airllm",
+      "url": "https://github.com/lyogavin/airllm",
+      "readme_url": "https://github.com/lyogavin/airllm/blob/main/README.md",
+      "readme_blob_sha": "fc041e131bfee574ffa7de9c67c1079267417eb8",
+      "classification": "Unmerged branch lead",
+      "finding": "V4-0731 selective-expert streaming PR323 closed unmerged; do not call it current main support."
+    },
+    {
+      "repository": "matteo-grella/fucina",
+      "url": "https://github.com/matteo-grella/fucina",
+      "readme_url": "https://github.com/matteo-grella/fucina/blob/main/README.md",
+      "readme_blob_sha": "ca15c6b6e18ccbc2f8cfc8310fe69e716266194c",
+      "classification": "Experimental CPU/hybrid candidate",
+      "finding": "Dedicated V4 GGUF runner and optional CUDA GEMM offload; no complete two-H100 GPU-execution proof."
+    },
+    {
+      "repository": "microsoft/onnxruntime-genai",
+      "url": "https://github.com/microsoft/onnxruntime-genai",
+      "readme_url": "https://github.com/microsoft/onnxruntime-genai/blob/main/README.md",
+      "readme_blob_sha": "478b56573442d7ffb87ddccd8838f5e52bd6e774",
+      "classification": "Draft implementation watch",
+      "finding": "Draft V4 PR2366; CUDA execution provider alone does not establish current V4 support or memory fit."
+    },
+    {
+      "repository": "ml-explore/mlx",
+      "url": "https://github.com/ml-explore/mlx",
+      "readme_url": "https://github.com/ml-explore/mlx/blob/main/README.md",
+      "readme_blob_sha": "fb30a24f2ce87d6f81822fc51e01c9fb6d38de28",
+      "classification": "Framework hardware eligible; model path unresolved",
+      "finding": "Official Linux CUDA backend supports SM7.5+, including H100; not categorically Apple-only."
+    },
+    {
+      "repository": "ml-explore/mlx-lm",
+      "url": "https://github.com/ml-explore/mlx-lm",
+      "readme_url": "https://github.com/ml-explore/mlx-lm/blob/main/README.md",
+      "readme_blob_sha": "ab749b340175ea0fdc4c5b9f27253a8e291aa98d",
+      "classification": "Development/model-path watch",
+      "finding": "V4 Flash PR1797 open; main model-tree scan contained V4.1 instead; V4 CUDA/TP2 unverified."
+    },
+    {
+      "repository": "mlc-ai/mlc-llm",
+      "url": "https://github.com/mlc-ai/mlc-llm",
+      "readme_url": "https://github.com/mlc-ai/mlc-llm/blob/main/README.md",
+      "readme_blob_sha": "d5ba2838c5e66a409a70d0d6842b2957380abd0c",
+      "classification": "No V4 evidence found in scan",
+      "finding": "CUDA-capable compiler/runtime; no positive V4 model support found in README/issue scan."
+    },
+    {
+      "repository": "modelscope/dash-infer",
+      "url": "https://github.com/modelscope/dash-infer",
+      "readme_url": "https://github.com/modelscope/dash-infer/blob/main/README.md",
+      "readme_blob_sha": "50f15abdff338ef78c7b712682ac8ee406977157",
+      "classification": "No V4 evidence found in scan",
+      "finding": "README explicitly includes H100/SM90a, but no V4 architecture support established by issue scan."
+    },
+    {
+      "repository": "modeltc/lightllm",
+      "url": "https://github.com/modeltc/lightllm",
+      "readme_url": "https://github.com/ModelTC/LightLLM/blob/main/README.md",
+      "readme_blob_sha": "50183231408995c6a130641e6bad5ca9cac8d644",
+      "classification": "Open implementation watch",
+      "finding": "V4 PR1593 open; older1355 closed unmerged; no released/main V4 pass established."
+    },
+    {
+      "repository": "neuralmagic/deepsparse",
+      "url": "https://github.com/neuralmagic/deepsparse",
+      "readme_url": "https://github.com/neuralmagic/deepsparse/blob/main/README.md",
+      "readme_blob_sha": "23e5c4f731aa189ac7c26744555276522f5594ee",
+      "classification": "CPU-oriented; no H100 V4 path established",
+      "finding": "CPU sparse-inference runtime, not an evidenced H100 V4 replacement."
+    },
+    {
+      "repository": "nvidia/fastertransformer",
+      "url": "https://github.com/nvidia/fastertransformer",
+      "readme_url": "https://github.com/NVIDIA/FasterTransformer/blob/main/README.md",
+      "readme_blob_sha": "8dd9bb15380a32e356a212da5529326b4f642c74",
+      "classification": "Legacy GPU engine; no V4 path established",
+      "finding": "Historical CUDA model implementations do not establish current V4-0731 support."
+    },
+    {
+      "repository": "nvidia/tensorrt-llm",
+      "url": "https://github.com/nvidia/tensorrt-llm",
+      "readme_url": "https://github.com/NVIDIA/TensorRT-LLM/blob/main/README.md",
+      "readme_blob_sha": "9d53b2d7e71cfb1d1dacb82cf10383d7bd6c6de4",
+      "classification": "First-tier native-checkpoint candidate",
+      "finding": "Explicit V4 SM90 support and tunable topology; examples are not proved GPU minima; exact0731 TP2 fit unknown."
+    },
+    {
+      "repository": "ollama/ollama",
+      "url": "https://github.com/ollama/ollama",
+      "readme_url": "https://github.com/ollama/ollama/blob/main/README.md",
+      "readme_blob_sha": "6ccf0acbeff491cfffdd6fc972109801fd68fe36",
+      "classification": "Backend packaging/server",
+      "finding": "Do not infer V4 support from a library label; verify bundled model implementation/format and GPU placement."
+    },
+    {
+      "repository": "openbmb/cpm.cu",
+      "url": "https://github.com/openbmb/cpm.cu",
+      "readme_url": "https://github.com/OpenBMB/CPM.cu/blob/main/README.md",
+      "readme_blob_sha": "0bce73a3e955dee39654501285cbebd6e664ab3b",
+      "classification": "No V4 path established",
+      "finding": "Compact CUDA inference implementation; inspected README did not establish V4 architecture/checkpoint execution."
+    },
+    {
+      "repository": "opencpil/prima.cpp",
+      "url": "https://github.com/opencpil/prima.cpp",
+      "readme_url": "https://github.com/OpenCPIL/prima.cpp/blob/main/README.md",
+      "readme_blob_sha": "9924562d840f400ce57c28f3dea05de898b02895",
+      "classification": "No V4 evidence found in scan",
+      "finding": "Distributed/heterogeneous inference; generic DeepSeek claims did not establish V4 in README/issue scan."
+    },
+    {
+      "repository": "opennmt/ctranslate2",
+      "url": "https://github.com/opennmt/ctranslate2",
+      "readme_url": "https://github.com/OpenNMT/CTranslate2/blob/master/README.md",
+      "readme_blob_sha": "5ccd7aad9b29c2d7743a5b7e572f1addcfd1fcaa",
+      "classification": "No V4 evidence found in scan",
+      "finding": "CUDA-capable inference library; no V4 support established in README/issue scan."
+    },
+    {
+      "repository": "otheru-ai/ember",
+      "url": "https://github.com/otheru-ai/ember",
+      "readme_url": "https://github.com/otheru-ai/ember/blob/main/README.md",
+      "readme_blob_sha": "f42eb37c3d19656ca9fc7a5fc422773a61e2f565",
+      "classification": "Explicit hardware mismatch",
+      "finding": "DeepSeekV4 engine explicitly restricted to AMD Strix Halo gfx1151; not NVIDIA H100."
+    },
+    {
+      "repository": "paddlepaddle/fastdeploy",
+      "url": "https://github.com/paddlepaddle/fastdeploy",
+      "readme_url": "https://github.com/PaddlePaddle/FastDeploy/blob/develop/README.md",
+      "readme_blob_sha": "336426870626616e13f977f1ec24f61b976c4af7",
+      "classification": "No V4 evidence found in scan",
+      "finding": "NVIDIA and other accelerator support; no positive V4 evidence found in README/recorded issue scan."
+    },
+    {
+      "repository": "powerserve-project/powerserve",
+      "url": "https://github.com/powerserve-project/powerserve",
+      "readme_url": "https://github.com/powerserve-project/PowerServe/blob/main/README.md",
+      "readme_blob_sha": "8dc5d7e1552f845ac982dc88410a4eb8b8afed64",
+      "classification": "Different accelerated hardware target",
+      "finding": "Documented Qualcomm QNN/Snapdragon path; no H100 V4 path established."
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "url": "https://github.com/sgl-project/sglang",
+      "readme_url": "https://github.com/sgl-project/sglang/blob/main/README.md",
+      "readme_blob_sha": "0c28df5e901bf8f1e1b0f8c0d5972ed0004b0529",
+      "classification": "First-tier native-checkpoint candidate",
+      "finding": "Explicit Hopper packed-FP4 runners and exact0731 support; four-H100 report; exact two-H100-NVL fit unverified."
+    },
+    {
+      "repository": "thu-pacman/chitu",
+      "url": "https://github.com/thu-pacman/chitu",
+      "readme_url": "https://github.com/thu-pacman/chitu/blob/public-main/README.md",
+      "readme_blob_sha": "5d04c86200334ec3bf05a2a464799020c5651cb3",
+      "classification": "Precision/edition-conditional candidate",
+      "finding": "Open FlashFP8/Base; native mixed-FP4 Flash marked pro; SM90 two-card fit unresolved."
+    },
+    {
+      "repository": "tiiny-ai/powerinfer",
+      "url": "https://github.com/tiiny-ai/powerinfer",
+      "readme_url": "https://github.com/Tiiny-AI/PowerInfer/blob/main/README.md",
+      "readme_blob_sha": "8fe32a6047c6cfae7732458c13cde495fa25c646",
+      "classification": "No current-model path established",
+      "finding": "Original activation-sparse engine lists ReLU model families, not V4's native architecture; not a two-H100 V4 pass."
+    },
+    {
+      "repository": "triton-inference-server/server",
+      "url": "https://github.com/triton-inference-server/server",
+      "readme_url": "https://github.com/triton-inference-server/server/blob/main/README.md",
+      "readme_blob_sha": "ce27a7d6db1770e78d5c098cf9dd57bdae768e44",
+      "classification": "Serving/backend layer",
+      "finding": "GPU/model compatibility inherits chosen execution backend; not an independent V4 implementation."
+    },
+    {
+      "repository": "turboderp-org/exllamav3",
+      "url": "https://github.com/turboderp-org/exllamav3",
+      "readme_url": "https://github.com/turboderp-org/exllamav3/blob/master/README.md",
+      "readme_blob_sha": "e0a917994f7b601f93ba6ad463d96cd0b7398872",
+      "classification": "Strong converted-weight candidate",
+      "finding": "Explicit V4 model; 0731 EXL3 artifact reported117.5GB; two-card runtime/H100 proof remains open."
+    },
+    {
+      "repository": "vectorch-ai/scalellm",
+      "url": "https://github.com/vectorch-ai/scalellm",
+      "readme_url": "https://github.com/vectorch-ai/ScaleLLM/blob/main/README.md",
+      "readme_blob_sha": "f8e89b1c62c177ce1e24a991fc8bd397a29b813f",
+      "classification": "No V4 evidence found in scan",
+      "finding": "GPU production-serving engine; no V4 support established by README/recorded issue scan."
+    },
+    {
+      "repository": "xorbitsai/inference",
+      "url": "https://github.com/xorbitsai/inference",
+      "readme_url": "https://github.com/xorbitsai/inference/blob/main/README.md",
+      "readme_blob_sha": "31463ae4d8d862e4086a830a00081703cd664225",
+      "classification": "Multi-engine serving layer",
+      "finding": "Xinference hosts underlying engines; assess V4 precision/H100 placement in the selected backend."
+    },
+    {
+      "repository": "ztxz16/fastllm",
+      "url": "https://github.com/ztxz16/fastllm",
+      "readme_url": "https://github.com/ztxz16/fastllm/blob/master/README.md",
+      "readme_blob_sha": "2d0333423a5555e34887c4c92843c3703d47f3d1",
+      "classification": "Independent multi-GPU candidate",
+      "finding": "V4 guide documents two-device TP and DSpark; exact SM90 kernels/fit unverified; specific multicuda bug reported."
+    }
+  ],
+  "selected_pull_request_states": [
+    {
+      "html_url": "https://github.com/ModelTC/LightLLM/pull/1593",
+      "title": "Support dsv4 model",
+      "state": "open",
+      "state_reason": null,
+      "merged_at": null,
+      "closed_at": null,
+      "updated_at": "2026-10-19T09:27:08Z",
+      "draft": false,
+      "head_sha": "a9ab2dd29f161de83d02f94327a0fed38f9f0bd7"
+    },
+    {
+      "html_url": "https://github.com/ikawrakow/ik_llama.cpp/pull/2165",
+      "title": "DS4: slowly approaching a meaningful performance",
+      "state": "closed",
+      "state_reason": null,
+      "merged_at": "2026-07-22T14:18:58Z",
+      "closed_at": "2026-07-22T14:18:58Z",
+      "updated_at": "2026-07-22T15:29:08Z",
+      "draft": false,
+      "head_sha": "03e2f4d675eb65ad509db79b8066a78cda658e79"
+    },
+    {
+      "html_url": "https://github.com/microsoft/onnxruntime-genai/pull/2366",
+      "title": "Integrating DeepSeek V4 Flash into ORT GenAI",
+      "state": "open",
+      "state_reason": null,
+      "merged_at": null,
+      "closed_at": null,
+      "updated_at": "2026-08-06T17:12:10Z",
+      "draft": true,
+      "head_sha": "9822cc0bdd90afbec3d430897bce8d878c8faf72"
+    },
+    {
+      "html_url": "https://github.com/ashhart/TensorFold/pull/827",
+      "title": "DeepSeek V4.1: the lane backend — one stream per slot on the lane core",
+      "state": "open",
+      "state_reason": null,
+      "merged_at": null,
+      "closed_at": null,
+      "updated_at": "2026-10-20T18:21:49Z",
+      "draft": false,
+      "head_sha": "c500068ed9f208a56f2232f2c33d76874fa271d2"
+    },
+    {
+      "html_url": "https://github.com/ModelTC/LightLLM/pull/1355",
+      "title": "support ds4",
+      "state": "closed",
+      "state_reason": null,
+      "merged_at": null,
+      "closed_at": "2026-10-08T06:58:31Z",
+      "updated_at": "2026-10-08T06:58:31Z",
+      "draft": false,
+      "head_sha": "a4a4c05d66eeba2f2db86025d011a1c2fb416fdb"
+    },
+    {
+      "html_url": "https://github.com/ggml-org/llama.cpp/pull/25784",
+      "title": "DeepseekV4 MTP + DSpark",
+      "state": "closed",
+      "state_reason": null,
+      "merged_at": "2026-08-02T12:55:35Z",
+      "closed_at": "2026-08-02T12:55:35Z",
+      "updated_at": "2026-08-07T22:04:13Z",
+      "draft": false,
+      "head_sha": "dc21b6c72fa6cf28b7193765c686891c7fd8f277"
+    },
+    {
+      "html_url": "https://github.com/lyogavin/airllm/pull/323",
+      "state": "closed",
+      "merged_at": null,
+      "checked_date": "2026-10-20"
+    },
+    {
+      "html_url": "https://github.com/ml-explore/mlx-lm/pull/1797",
+      "state": "open",
+      "merged_at": null,
+      "checked_date": "2026-10-20"
+    }
+  ],
+  "selected_source_tree_pins": [
+    {
+      "repository": "alibaba/rtp-llm",
+      "tree_sha": "bcd02fdb056bdf42714b697c1aab0260501f3aa6",
+      "tree_truncated": false,
+      "model_related_path_count": 50
+    },
+    {
+      "repository": "dphnAI/sonar",
+      "tree_sha": "11c991b7d7ad1b58bd9dfbfe8f803dd16a29db50",
+      "tree_truncated": false,
+      "model_related_path_count": 231
+    },
+    {
+      "repository": "exo-explore/exo",
+      "tree_sha": "bc412e2230f395e652c23426a5eb88dfa515769b",
+      "tree_truncated": false,
+      "model_related_path_count": 4
+    },
+    {
+      "repository": "ggml-org/llama.cpp",
+      "tree_sha": "839a572a4cdecdb80d211297b8e7d7323a6e99d2",
+      "tree_truncated": false,
+      "model_related_path_count": 4
+    },
+    {
+      "repository": "ghyathmoussa/rLLM",
+      "tree_sha": "340d572c77fd581b50c6d7454ee9560e5dcf00e4",
+      "tree_truncated": false,
+      "model_related_path_count": 0
+    },
+    {
+      "repository": "turboderp-org/exllamav3",
+      "tree_sha": "a3bfbfd0d3c0cea67815146a19fcd2bb3f84709a",
+      "tree_truncated": false,
+      "model_related_path_count": 6
+    },
+    {
+      "repository": "thu-pacman/chitu",
+      "tree_sha": "ee2b8bb9fb282ec3d6e141e562789f6f653537cd",
+      "tree_truncated": false,
+      "model_related_path_count": 8
+    },
+    {
+      "repository": "ModelTC/LightLLM",
+      "tree_sha": "fbbd56f1c8358d40704bbd141aa781417fb5856e",
+      "tree_truncated": false,
+      "model_related_path_count": 0
+    },
+    {
+      "repository": "ml-explore/mlx-lm",
+      "tree_sha": "72be8c955d9a0d3099bd01865af288e0e947c3fa",
+      "tree_truncated": false,
+      "model_related_path_count": 2
+    },
+    {
+      "repository": "InternLM/lmdeploy",
+      "tree_sha": "52e57d8f0d3a00fc53010f34bb5fe9109e73c560",
+      "tree_truncated": false,
+      "model_related_path_count": 63
+    },
+    {
+      "repository": "matteo-grella/fucina",
+      "tree_sha": "e7671113c71d2314331dacc2a715f630104a971b",
+      "tree_truncated": false,
+      "model_related_path_count": 6
+    },
+    {
+      "repository": "exo-explore/exo",
+      "tree_sha": "bc412e2230f395e652c23426a5eb88dfa515769b",
+      "tree_truncated": false,
+      "model_related_path_count": 4
+    }
+  ],
+  "successful_issue_scans": [
+    {
+      "query": "repo:EricLBuehler/mistral.rs DeepSeek V4",
+      "result_count": 1
+    },
+    {
+      "query": "repo:FMInference/FlexLLMGen DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:GradientHQ/parallax DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:InfiniTensor/InfiniLM DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:ModelTC/lightllm DeepSeek V4",
+      "result_count": 4
+    },
+    {
+      "query": "repo:OpenNMT/CTranslate2 DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:PaddlePaddle/FastDeploy DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:aeonmindai/arc DeepSeek V4",
+      "result_count": 1
+    },
+    {
+      "query": "repo:alibaba/rtp-llm DeepSeek V4",
+      "result_count": 117
+    },
+    {
+      "query": "repo:deepspeedai/DeepSpeed DeepSeek V4",
+      "result_count": 5
+    },
+    {
+      "query": "repo:deepspeedai/DeepSpeed-MII DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:dphnAI/sonar DeepSeek V4",
+      "result_count": 14
+    },
+    {
+      "query": "repo:efeslab/Nanoflow DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:exo-explore/exo DeepSeek V4",
+      "result_count": 28
+    },
+    {
+      "query": "repo:flexflow/flexflow-serve DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:ghyathmoussa/rLLM DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:huggingface/candle DeepSeek V4",
+      "result_count": 5
+    },
+    {
+      "query": "repo:huggingface/transformers DeepSeek V4",
+      "result_count": 163
+    },
+    {
+      "query": "repo:lyogavin/airllm DeepSeek V4",
+      "result_count": 3
+    },
+    {
+      "query": "repo:matteo-grella/fucina DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:microsoft/onnxruntime-genai DeepSeek V4",
+      "result_count": 2
+    },
+    {
+      "query": "repo:ml-explore/mlx DeepSeek V4",
+      "result_count": 11
+    },
+    {
+      "query": "repo:ml-explore/mlx-lm DeepSeek V4",
+      "result_count": 34
+    },
+    {
+      "query": "repo:mlc-ai/mlc-llm DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:modelscope/dash-infer DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:powerserve-project/PowerServe DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:vectorch-ai/ScaleLLM DeepSeek V4",
+      "result_count": 0
+    },
+    {
+      "query": "repo:ztxz16/fastllm DeepSeek V4",
+      "result_count": 17
+    }
+  ],
+  "access_limit_note": "Initial invalid repo scopes and404probes do not count as negative model/hardware evidence. Redirects canonicalized from successful README URLs.",
+  "linked_public_source_count": 94,
+  "report_file": "research_inference-engine-compatibility_20261020.md",
+  "source_urls": [
+    "https://github.com/sgl-project/sglang/blob/main/docs/cookbook/autoregressive/DeepSeek/DeepSeek-V4.mdx",
+    "https://github.com/InternLM/lmdeploy/pull/4554",
+    "https://github.com/NVIDIA/TensorRT-LLM/blob/main/examples/models/core/deepseek_v4/README.md",
+    "https://github.com/ashhart/TensorFold/blob/main/README.md",
+    "https://github.com/ashhart/TensorFold/blob/main/docs/recipes/deepseek-v4-flash.md",
+    "https://ml-explore.github.io/mlx/build/html/install.html",
+    "https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/pytorch/backends/cuda/moe/v4_fp4.py",
+    "https://github.com/InternLM/lmdeploy/blob/main/autotest/configs/deepseek-ai/DeepSeek-V4-Flash-0731.yml",
+    "https://github.com/ztxz16/fastllm/blob/master/docs/deepseek.md",
+    "https://github.com/antirez/ds4/blob/main/docs/CUDA_MULTI_GPU.md",
+    "https://huggingface.co/aeonmind/DeepSeek-V4-Flash-UQFF-qtip2/blob/main/README.md",
+    "https://github.com/matteo-grella/fucina/blob/main/apps/deepseek4/README.md",
+    "https://github.com/ModelTC/LightLLM/pull/1593",
+    "https://github.com/alibaba/rtp-llm/pull/1508",
+    "https://github.com/microsoft/onnxruntime-genai/pull/2366",
+    "https://github.com/lyogavin/airllm/pull/323",
+    "https://github.com/huggingface/candle/issues/3924",
+    "https://github.com/thu-pacman/chitu/blob/public-main/docs/en/SUPPORTED_MODELS.md",
+    "https://github.com/thu-pacman/chitu/blob/public-main/chitu/config/models/DeepSeek-V4-Flash.yaml",
+    "https://github.com/deepseek-ai/DeepInfer/blob/main/README.md",
+    "https://github.com/otheru-ai/ember/blob/main/README.md",
+    "https://github.com/ml-explore/mlx-lm/pull/1797",
+    "https://forums.developer.nvidia.com/t/running-deepseek-v4-flash-0731-on-a-4xh100-node-using-sglang/384552",
+    "https://github.com/sgl-project/sglang/issues/33397",
+    "https://github.com/kvcache-ai/ktransformers/blob/main/kt-kernel/README.md",
+    "https://github.com/sgl-project/sglang/issues/33549",
+    "https://github.com/flashinfer-ai/flashinfer/issues/5438",
+    "https://github.com/turboderp-org/exllamav3/blob/master/README.md",
+    "https://github.com/turboderp-org/exllamav3/issues/210",
+    "https://github.com/ikawrakow/ik_llama.cpp/blob/main/README.md",
+    "https://github.com/ikawrakow/ik_llama.cpp/pull/2165",
+    "https://github.com/ggml-org/llama.cpp/blob/master/src/models/deepseek4.cpp",
+    "https://github.com/ggml-org/llama.cpp/pull/25784",
+    "https://github.com/ztxz16/fastllm/blob/master/docs/benchmarks/deepseek_v4.md",
+    "https://github.com/ztxz16/fastllm/issues/666",
+    "https://github.com/antirez/ds4/blob/main/README.md",
+    "https://github.com/antirez/ds4/blob/main/Makefile",
+    "https://github.com/aeonmindai/arc/blob/main/README.md",
+    "https://github.com/localai-org/vllm.cpp/blob/main/README.md",
+    "https://github.com/kvcache-ai/ktransformers/blob/main/README.md",
+    "https://github.com/matteo-grella/fucina/blob/main/README.md",
+    "https://github.com/ashhart/TensorFold/pull/827",
+    "https://github.com/thu-pacman/chitu/blob/public-main/chitu/config/models/DeepSeek-V4-Flash-FP8.yaml",
+    "https://github.com/dphnAI/sonar/blob/main/README.md",
+    "https://github.com/dphnAI/sonar/blob/main/aphrodite/models/deepseek_v4/quant_config.py",
+    "https://github.com/dphnAI/sonar/blob/main/recipes/models/deepseek-ai/DeepSeek-V4-Flash.yaml",
+    "https://github.com/ModelTC/LightLLM/pull/1355",
+    "https://github.com/exo-explore/exo/blob/main/README.md",
+    "https://github.com/powerserve-project/PowerServe/blob/main/README.md",
+    "https://github.com/ai-dynamo/dynamo/blob/main/README.md",
+    "https://github.com/triton-inference-server/server/blob/main/README.md",
+    "https://huggingface.co/docs/transformers/model_doc/deepseek_v4",
+    "https://github.com/hebo1221/nano-deepseek-v4/blob/main/README.md",
+    "https://github.com/aeonmindai/arc/blob/master/README.md",
+    "https://github.com/alibaba/rtp-llm/blob/main/README.md",
+    "https://github.com/deepspeedai/DeepSpeed/blob/master/README.md",
+    "https://github.com/deepspeedai/DeepSpeed-MII/blob/main/README.md",
+    "https://github.com/efeslab/Nanoflow/blob/Nanoflow-python/README.md",
+    "https://github.com/EricLBuehler/mistral.rs/blob/master/README.md",
+    "https://github.com/flexflow/flexflow-serve/blob/inference/README.md",
+    "https://github.com/FMInference/FlexLLMGen/blob/main/README.md",
+    "https://github.com/FoxEngine-ai/aphrodite/blob/main/README.md",
+    "https://github.com/ggml-org/llama.cpp/blob/master/README.md",
+    "https://github.com/ghyathmoussa/rLLM/blob/main/README.md",
+    "https://github.com/GradientHQ/parallax/blob/main/README.md",
+    "https://github.com/huggingface/candle/blob/main/README.md",
+    "https://github.com/huggingface/optimum-nvidia/blob/main/README.md",
+    "https://github.com/huggingface/text-generation-inference/blob/main/README.md",
+    "https://github.com/huggingface/transformers/blob/main/README.md",
+    "https://github.com/InfiniTensor/InfiniLM/blob/main/README.md",
+    "https://github.com/intel/ipex-llm/blob/main/README.md",
+    "https://github.com/InternLM/lmdeploy/blob/main/README.md",
+    "https://github.com/lyogavin/airllm/blob/main/README.md",
+    "https://github.com/microsoft/onnxruntime-genai/blob/main/README.md",
+    "https://github.com/ml-explore/mlx/blob/main/README.md",
+    "https://github.com/ml-explore/mlx-lm/blob/main/README.md",
+    "https://github.com/mlc-ai/mlc-llm/blob/main/README.md",
+    "https://github.com/modelscope/dash-infer/blob/main/README.md",
+    "https://github.com/ModelTC/LightLLM/blob/main/README.md",
+    "https://github.com/neuralmagic/deepsparse/blob/main/README.md",
+    "https://github.com/NVIDIA/FasterTransformer/blob/main/README.md",
+    "https://github.com/NVIDIA/TensorRT-LLM/blob/main/README.md",
+    "https://github.com/ollama/ollama/blob/main/README.md",
+    "https://github.com/OpenBMB/CPM.cu/blob/main/README.md",
+    "https://github.com/OpenCPIL/prima.cpp/blob/main/README.md",
+    "https://github.com/OpenNMT/CTranslate2/blob/master/README.md",
+    "https://github.com/PaddlePaddle/FastDeploy/blob/develop/README.md",
+    "https://github.com/sgl-project/sglang/blob/main/README.md",
+    "https://github.com/thu-pacman/chitu/blob/public-main/README.md",
+    "https://github.com/Tiiny-AI/PowerInfer/blob/main/README.md",
+    "https://github.com/vectorch-ai/ScaleLLM/blob/main/README.md",
+    "https://github.com/xorbitsai/inference/blob/main/README.md",
+    "https://github.com/ztxz16/fastllm/blob/master/README.md",
+    "https://tensorfoundry.io/products/forge"
+  ]
+}
