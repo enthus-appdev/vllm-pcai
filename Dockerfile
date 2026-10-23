@@ -267,6 +267,20 @@ assert out.count("<｜end▁of▁sentence｜>") == 1, f"stray mid-turn EOS:\n{ou
 print("deepseek_v4 encoder merges split assistant turns OK")
 PY
 
+# Poll busy readers' notify sockets so libzmq command backlogs remain bounded.
+# vllm#63165 production-source diff, head d3ada0390ca556e62150a3c751cdd893a2306ebf.
+# No queue-size or CUDA changes.
+COPY patches/63165-shm-notify-backlog.patch /tmp/runtime-fix.patch
+COPY diag/verify_shm_notify_patch.py /tmp/verify_shm_notify_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/runtime-fix.patch | cut -d' ' -f1)" = "468f5d097ad180363cc8133021b96ee7fc16aba1b48e1631a194be79f84ea609"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/runtime-fix.patch; \
+    else patch -p1 -d "$SITE" < /tmp/runtime-fix.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_shm_notify_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/runtime-fix.patch /tmp/verify_shm_notify_patch.py
+
 # CUDA V4 C128 history uses one bounded ring per request, including draft lookahead.
 # Production-source diff from vllm#58074 head f8bb0ba871415a779de33fadcb40ab2ba5acbc09.
 # Python CuTe DSL/Triton JIT only; no compiled csrc changes or weight requantization.
