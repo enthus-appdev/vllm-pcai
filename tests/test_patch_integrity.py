@@ -32,6 +32,35 @@ class PatchIntegrityTests(unittest.TestCase):
         )
         self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
 
+    def test_pinned_c128_runtime_patch(self):
+        patch = ROOT / "patches" / "58074-deepseek-v4-c128-circular-state.patch"
+        self.assertEqual(
+            hashlib.sha256(patch.read_bytes()).hexdigest(),
+            "cd299bb8fe6f1e0501d4fa2b63742f08f91549206e88cb6de3b795ffbcb0f9d0",
+        )
+        paths = {
+            line.split()[2].removeprefix("a/")
+            for line in patch.read_text().splitlines()
+            if line.startswith("diff --git ")
+        }
+        self.assertEqual(
+            paths,
+            set(
+                [
+                    "vllm/models/deepseek_v4/common/ops/save_partial_states.py",
+                    "vllm/models/deepseek_v4/compressor.py",
+                    "vllm/models/deepseek_v4/nvidia/ops/sparse_attn_compress_cutedsl.py",
+                ]
+            ),
+        )
+        self.assertTrue(all(path.endswith(".py") for path in paths))
+        self.assertNotIn("csrc/", patch.read_text())
+        self.assertIn(
+            hashlib.sha256(patch.read_bytes()).hexdigest(),
+            (ROOT / "Dockerfile").read_text(),
+        )
+        self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
+
     def test_fixed_width_patch_is_pinned_and_python_only(self):
         patch = ROOT / "patches" / "58068-fixed-width-indexer-logits-v0.32.patch"
         digest = "967eda4bd76a3f94cbdfccaebec7e9bbd27b86cb8be225ab5c2b666924cffb86"
