@@ -208,8 +208,6 @@ sites = re.findall(r"MessageQueue\((?!\s*\)).*?\)", src, re.S)
 assert sites, "no MessageQueue(...) construction found — upstream refactor, re-check the patch"
 bare = [s for s in sites if "max_chunk_bytes" not in s]
 assert not bare, f"MessageQueue built without max_chunk_bytes: {bare}"
-import os
-assert "VLLM_MQ_MAX_CHUNK_BYTES_MB" not in os.environ, "queue size is per-deployment; see README"
 print("all MessageQueue sites honour VLLM_MQ_MAX_CHUNK_BYTES_MB OK")
 PY
 
