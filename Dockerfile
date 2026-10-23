@@ -295,3 +295,17 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     python3 /tmp/verify_c128_patch.py "$VLLM_DIR"; \
     rm -f /tmp/runtime-fix.patch /tmp/verify_c128_patch.py
+
+# Count physical held blocks, not null-padded table positions, for SWA admission.
+# vllm#60045 production-only diff, head 843db1462a066076d407bb628098140da4455be5.
+# CPU tripwire checks isolated source behavior; GPU serving remains unqualified.
+COPY patches/60045-swa-admission-held-blocks.patch /tmp/offload-fix.patch
+COPY diag/verify_swa_admission_patch.py /tmp/verify_swa_admission_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "d2e0787a02594e4582ebdad78c92d928fd3f19dfc3bed6d98b192f6cc4c729a4"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
+    else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_swa_admission_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/offload-fix.patch /tmp/verify_swa_admission_patch.py
