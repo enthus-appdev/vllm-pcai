@@ -4,7 +4,7 @@ Custom [vLLM](https://github.com/vllm-project/vllm) images for **HPE Private Clo
 
 ## Why this image exists
 
-PCAI cannot mount volumes through its UI, so anything a model needs at runtime that isn't in the base `vllm/vllm-openai` image **must be baked in**. This image adds four layers on top of the stock vLLM base:
+This image adds four layers on top of the stock `vllm/vllm-openai` base. They are baked in because MLIS cannot mount volumes (see [Deployment via MLIS](#deployment-via-mlis)):
 
 1. **Enhanced chat templates** — Qwen3.5/3.6 hardened templates (hidden historical reasoning, XML tool-call formatting, proper ` response` handling) from [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image. (Gemma 4 uses vLLM's **in-image** template at `/vllm-workspace/examples/tool_chat_template_gemma4.jinja`.)
 
@@ -37,6 +37,19 @@ vllm-pcai/
 ├── tests/                    # patch syntax checks (python3 -m unittest discover -s tests)
 └── .dockerignore
 ```
+
+## Deployment via MLIS
+
+**Limitations**
+
+- No volume mounts through the UI. Templates and patches must be in the image.
+- `/dev/shm` is fixed at 64 MiB and cannot be enlarged.
+
+**Requirements**
+
+- Set `VLLM_MQ_MAX_CHUNK_BYTES_MB=1` in the deployment's environment. The image leaves vLLM's default (16 MiB), and with the bundled queue patch the message queues then need about `(TP + 1) × 160 MiB` of `/dev/shm`: 480 MiB at TP=2. vLLM refuses to start when they do not fit. At 1 MiB they need about 30 MiB at TP=2; larger messages fall back to a local socket.
+
+Deployments that mount a larger memory-backed `/dev/shm` volume need no override.
 
 ## Templates available at runtime
 
