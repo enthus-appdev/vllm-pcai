@@ -38,6 +38,14 @@ vllm-pcai/
 └── .dockerignore
 ```
 
+## Shared memory (`/dev/shm`)
+
+The image does not set `VLLM_MQ_MAX_CHUNK_BYTES_MB`, so vLLM's default (16 MiB) applies. With the bundled queue patch, tensor-parallel workers then need about `(TP + 1) × 160 MiB` of `/dev/shm` for vLLM's message queues: 480 MiB at TP=2.
+
+**Deployment via MLIS requires `VLLM_MQ_MAX_CHUNK_BYTES_MB=1`.** MLIS fixes `/dev/shm` at 64 MiB with no way to enlarge it, and vLLM refuses to start when the queues do not fit. At 1 MiB the queues need about 30 MiB at TP=2. Larger messages fall back to a local socket instead of failing. Add the variable to the MLIS deployment's environment.
+
+Deployments that mount a larger memory-backed `/dev/shm` volume need no override.
+
 ## Templates available at runtime
 
 | Path | Source |
