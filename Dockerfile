@@ -185,11 +185,8 @@ assert build("s3://other/drafter/", CACHE) == "s3://other/drafter/", "clobbered 
 print("spec-draft model_weights inheritance OK")
 PY
 
-# vllm#48879 added check_shm_free_space, which refuses to over-commit /dev/shm. MessageQueue's
-# rpc_broadcast_mq honours VLLM_MQ_MAX_CHUNK_BYTES_MB, but worker_response_mq (created once PER
-# WORKER) hardcodes 24 MiB, so the env var cannot bound shm usage. Not filed upstream yet; one
-# call site ignoring the env var is a bug. Without an override, this patch makes that queue use
-# vLLM's 16 MiB default. Small-/dev/shm deployments (MLIS: 64 MiB) must set the env var; see README.
+# Make worker_response_mq (one per worker) honour VLLM_MQ_MAX_CHUNK_BYTES_MB like rpc_broadcast_mq,
+# so the env var bounds /dev/shm usage. Small-/dev/shm deployments must set it; see README.
 COPY patches/mq-worker-response-honour-chunk-bytes.patch /tmp/mq-chunk.patch
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
