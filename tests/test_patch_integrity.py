@@ -1,5 +1,6 @@
 """Catch malformed patch files before downloading the base image."""
 
+import hashlib
 import pathlib
 import subprocess
 import unittest
@@ -9,6 +10,35 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class PatchIntegrityTests(unittest.TestCase):
+    def test_pinned_runtime_patch(self):
+        patch = ROOT / "patches" / "58074-deepseek-v4-c128-circular-state.patch"
+        self.assertEqual(
+            hashlib.sha256(patch.read_bytes()).hexdigest(),
+            "cd299bb8fe6f1e0501d4fa2b63742f08f91549206e88cb6de3b795ffbcb0f9d0",
+        )
+        paths = {
+            line.split()[2].removeprefix("a/")
+            for line in patch.read_text().splitlines()
+            if line.startswith("diff --git ")
+        }
+        self.assertEqual(
+            paths,
+            set(
+                [
+                    "vllm/models/deepseek_v4/common/ops/save_partial_states.py",
+                    "vllm/models/deepseek_v4/compressor.py",
+                    "vllm/models/deepseek_v4/nvidia/ops/sparse_attn_compress_cutedsl.py",
+                ]
+            ),
+        )
+        self.assertTrue(all(path.endswith(".py") for path in paths))
+        self.assertNotIn("csrc/", patch.read_text())
+        self.assertIn(
+            hashlib.sha256(patch.read_bytes()).hexdigest(),
+            (ROOT / "Dockerfile").read_text(),
+        )
+        self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
+
     def test_git_can_parse_every_patch(self):
         patches = sorted((ROOT / "patches").glob("*.patch"))
         self.assertTrue(patches, "No vendored patches found")
