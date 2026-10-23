@@ -32,6 +32,30 @@ class PatchIntegrityTests(unittest.TestCase):
         )
         self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
 
+    def test_fixed_width_patch_is_pinned_and_python_only(self):
+        patch = ROOT / "patches" / "58068-fixed-width-indexer-logits-v0.32.patch"
+        digest = "967eda4bd76a3f94cbdfccaebec7e9bbd27b86cb8be225ab5c2b666924cffb86"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
+        paths = {
+            line.split()[2].removeprefix("a/")
+            for line in patch.read_text().splitlines()
+            if line.startswith("diff --git ")
+        }
+        self.assertEqual(
+            paths,
+            {
+                "vllm/envs.py",
+                "vllm/model_executor/layers/sparse_attn_indexer.py",
+                "vllm/models/glm5next/nvidia/sparse_indexer.py",
+                "vllm/utils/deep_gemm.py",
+                "vllm/v1/attention/backends/mla/indexer.py",
+            },
+        )
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn(digest, dockerfile)
+        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
+        self.assertNotIn("ENV VLLM_SPARSE_INDEXER_FIXED_LOGITS_WIDTH", dockerfile)
+
     def test_git_can_parse_every_patch(self):
         patches = sorted((ROOT / "patches").glob("*.patch"))
         self.assertTrue(patches, "No vendored patches found")

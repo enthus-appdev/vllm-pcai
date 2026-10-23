@@ -280,3 +280,17 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     python3 /tmp/verify_shm_notify_patch.py "$VLLM_DIR"; \
     rm -f /tmp/runtime-fix.patch /tmp/verify_shm_notify_patch.py
+
+# Backport vllm#58068 head 1631c22e88f5f08e7977b69863a1c85fb9efb479.
+# Existing DeepGEMM max_seqlen_k API; Python-only, no checkpoint conversion.
+# Hopper stays opt-in: set VLLM_SPARSE_INDEXER_FIXED_LOGITS_WIDTH=1 at runtime.
+COPY patches/58068-fixed-width-indexer-logits-v0.32.patch /tmp/fixed-logits.patch
+COPY diag/verify_fixed_width_logits_patch.py /tmp/verify_fixed_width_logits_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/fixed-logits.patch | cut -d' ' -f1)" = "967eda4bd76a3f94cbdfccaebec7e9bbd27b86cb8be225ab5c2b666924cffb86"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/fixed-logits.patch; \
+    else patch -p1 -d "$SITE" < /tmp/fixed-logits.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_fixed_width_logits_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/fixed-logits.patch /tmp/verify_fixed_width_logits_patch.py
