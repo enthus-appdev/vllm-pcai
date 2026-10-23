@@ -61,6 +61,21 @@ class PatchIntegrityTests(unittest.TestCase):
         )
         self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
 
+    def test_pinned_simple_offload_lru_patch(self):
+        patch = ROOT / "patches" / "62444-simple-offload-lru-refresh.patch"
+        digest = "022cf9e9a8d34b6a9330e472ee2fcc887a6c07643eee4b3352d4b1b556d13970"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
+        paths = {
+            line.split()[2].removeprefix("a/")
+            for line in patch.read_text().splitlines()
+            if line.startswith("diff --git ")
+        }
+        self.assertEqual(paths, {"vllm/v1/simple_kv_offload/manager.py"})
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn(digest, dockerfile)
+        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
+        self.assertIn("python3 /tmp/verify_simple_offload_lru_patch.py", dockerfile)
+
     def test_pinned_swa_admission_patch(self):
         patch = ROOT / "patches" / "60045-swa-admission-held-blocks.patch"
         digest = "d2e0787a02594e4582ebdad78c92d928fd3f19dfc3bed6d98b192f6cc4c729a4"
