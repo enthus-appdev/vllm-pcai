@@ -1,0 +1,478 @@
+From 001f6df2192768582777d4cbd4908d48dc124761 Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 13:12:34 +0100
+Subject: [PATCH] feat: add hash-verified local model staging
+
+---
+ LOCAL-MODEL-STAGING.md                        |  36 ++++++
+ charts/pcai-inference/Chart.yaml              |   2 +-
+ charts/pcai-inference/files/stage.py          | 114 +++++++++++++++++
+ .../pcai-inference/templates/deployment.yaml  |  33 +++++
+ .../templates/storage-check.yaml              |   4 +
+ charts/pcai-inference/values.schema.json      |  47 +++++++
+ charts/pcai-inference/values.yaml             |  10 ++
+ checks/test_local_model.py                    | 121 ++++++++++++++++++
+ 8 files changed, 366 insertions(+), 1 deletion(-)
+ create mode 100644 LOCAL-MODEL-STAGING.md
+ create mode 100644 charts/pcai-inference/files/stage.py
+ create mode 100644 checks/test_local_model.py
+
+diff --git a/LOCAL-MODEL-STAGING.md b/LOCAL-MODEL-STAGING.md
+new file mode 100644
+index 0000000..b84bc2c
+--- /dev/null
++++ b/LOCAL-MODEL-STAGING.md
+@@ -0,0 +1,36 @@
++# Selected-file local staging
++
++The candidate chart adds opt-in localModel staging without changing the default
++model-serving configuration. It is intended for large immutable lookup tables,
++not full-checkpoint prefetch.
++
++When enabled, supply a source PVC, an exact preparation receipt, a revision,
++and a filename/size/SHA256 manifest. An init container mounts that PVC read-only,
++checks its receipt and current local free space, and copies only selected files
++to a disk-backed emptyDir. It checks input hashes and independently rehashes
++destination files before an atomic rename. Source and destination cache pages
++are advised away during copying/verification.
++
++The engine mounts /local-model read-only and never mounts the source PVC.
++The disk volume has no medium: Memory. Staging requires an engine ephemeral-storage
++request and limit; reserve the local volume plus normal temporary/log overhead.
++The stage init is CPU-only and uses at most 512 MiB by container limit; flushing
++and dropping cache every 32 MiB bounds copying's dirty-page window.
++
++Completed copies survive a container restart in the same pod and are rehashed
++if the init runs again. They disappear with the pod. Keep the source PVC.
++Neither a sizeLimit nor a scheduler request preallocates local disk; check current
++free space and node pressure before activation. Buffer/cache and memory safety
++still require real observation.
++
++Offline checks:
++
++```sh
++python3 -m unittest discover -s checks -v
++helm lint charts/pcai-inference
++```
++
++The initial EAQ candidate uses two original Engram shards (~189.13 GiB) and their
++index, a 230 GiB local volume, 32 GiB free-space headroom, and a 240/260 GiB
++engine ephemeral-storage request/limit. The staging addition does not itself
++make EXL3 or a disk Engram runtime available; use a separately qualified image.
+diff --git a/charts/pcai-inference/Chart.yaml b/charts/pcai-inference/Chart.yaml
+index c2f0aa8..6b512d6 100644
+--- a/charts/pcai-inference/Chart.yaml
++++ b/charts/pcai-inference/Chart.yaml
+@@ -2,5 +2,5 @@ apiVersion: v2
+ name: pcai-inference
+ description: Model server for PCAI custom frameworks - vLLM or SGLang, dedicated read-only model PVC, large /dev/shm, persistent compile cache, optional WireGuard-over-HTTPS access
+ type: application
+-version: 0.1.0
++version: 0.2.0-rc.1
+ home: https://github.com/enthus-appdev/pcai-inference
+diff --git a/charts/pcai-inference/files/stage.py b/charts/pcai-inference/files/stage.py
+new file mode 100644
+index 0000000..e623f26
+--- /dev/null
++++ b/charts/pcai-inference/files/stage.py
+@@ -0,0 +1,114 @@
++"""Stage selected, hash-pinned model files from read-only PVC to disk emptyDir."""
++import hashlib
++import json
++import os
++from pathlib import Path
++import re
++
++from check import quantity_bytes
++
++CHUNK = 4 * 1024 * 1024
++SYNC_EVERY = 32 * 1024 * 1024
++
++
++def pinned_file(root, name):
++    if not name or Path(name).name != name or name in ('.', '..'):
++        raise ValueError('staging accepts plain filenames only')
++    root = Path(root).resolve()
++    target = (root / name).resolve()
++    if not target.is_relative_to(root):
++        raise ValueError('staging path escapes volume')
++    return target
++
++
++def digest(path):
++    h = hashlib.sha256()
++    with path.open('rb') as f:
++        while block := f.read(CHUNK):
++            h.update(block)
++            os.posix_fadvise(f.fileno(), 0, f.tell(), os.POSIX_FADV_DONTNEED)
++    return h.hexdigest()
++
++
++def matches(path, spec):
++    return path.is_file() and path.stat().st_size == spec['size'] and digest(path) == spec['sha256']
++
++
++def copy_verified(source, target, spec):
++    partial = target.with_name(target.name + '.partial')
++    h = hashlib.sha256()
++    copied = 0
++    try:
++        with source.open('rb') as src, partial.open('wb') as dst:
++            while block := src.read(CHUNK):
++                dst.write(block)
++                h.update(block)
++                copied += len(block)
++                if copied % SYNC_EVERY == 0:
++                    dst.flush()
++                    os.fsync(dst.fileno())
++                    os.posix_fadvise(dst.fileno(), 0, copied, os.POSIX_FADV_DONTNEED)
++                    os.posix_fadvise(src.fileno(), 0, copied, os.POSIX_FADV_DONTNEED)
++            dst.flush()
++            os.fsync(dst.fileno())
++            os.posix_fadvise(dst.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
++            os.posix_fadvise(src.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
++        if copied != spec['size'] or h.hexdigest() != spec['sha256']:
++            raise ValueError('source integrity mismatch for ' + spec['path'])
++        # Independent destination read verifies the actual staged file, not just input bytes.
++        if not matches(partial, spec):
++            raise ValueError('destination integrity mismatch for ' + spec['path'])
++        os.replace(partial, target)
++    finally:
++        partial.unlink(missing_ok=True)
++
++
++def stage(env, require_readonly=True):
++    spec = json.loads(env['LOCAL_MODEL'])
++    source_root = Path(env['LOCAL_SOURCE_ROOT'])
++    target = Path(env['LOCAL_TARGET_ROOT'])
++    if require_readonly and not os.statvfs(source_root).f_flag & os.ST_RDONLY:
++        raise ValueError('source PVC must be mounted read-only')
++    revision = spec['sourceVerify']['revision']
++    if not re.fullmatch('[a-f0-9]{40}', revision):
++        raise ValueError('source revision must be immutable')
++    done = json.loads((source_root / '.pcai-preparation/complete.json').read_text())
++    expected = spec['sourceVerify']
++    for key, field in [('revision', 'revision'), ('manifest_sha256', 'manifestSha256'),
++                       ('storage_marker_id', 'markerId'), ('files', 'files'), ('bytes', 'bytes')]:
++        if done.get(key) != expected[field]:
++            raise ValueError('source receipt mismatch: ' + key)
++    source = source_root / 'revisions' / revision
++    target.mkdir(parents=True, exist_ok=True)
++    receipt = target / '.pcai-stage-complete.json'
++    receipt.unlink(missing_ok=True)
++    todo = []
++    seen = set()
++    for item in spec['files']:
++        if item['path'] in seen or not re.fullmatch('[a-f0-9]{64}', item['sha256']) or item['size'] <= 0:
++            raise ValueError('invalid or duplicate staging manifest entry')
++        seen.add(item['path'])
++        src, dst = pinned_file(source, item['path']), pinned_file(target, item['path'])
++        if not src.is_file() or src.stat().st_size != item['size']:
++            raise ValueError('source file absent or size mismatch: ' + item['path'])
++        # Clean a previous failed attempt before calculating free space.
++        dst.with_name(dst.name + '.partial').unlink(missing_ok=True)
++        if not matches(dst, item):
++            dst.unlink(missing_ok=True)
++            todo.append((src, dst, item))
++    stats = os.statvfs(target)
++    required = sum(item['size'] for _, _, item in todo) + quantity_bytes(spec['freeHeadroom'])
++    if stats.f_bavail * stats.f_frsize < required:
++        raise ValueError('insufficient current local free space including headroom')
++    for src, dst, item in todo:
++        copy_verified(src, dst, item)
++        print(json.dumps({'staged_verified': item['path'], 'bytes': item['size']}), flush=True)
++    result = {'revision': revision, 'files': spec['files']}
++    temporary = target / '.pcai-stage-complete.partial'
++    temporary.write_text(json.dumps(result))
++    os.replace(temporary, receipt)
++    return result
++
++
++if __name__ == '__main__':
++    print(json.dumps(stage(os.environ)), flush=True)
+diff --git a/charts/pcai-inference/templates/deployment.yaml b/charts/pcai-inference/templates/deployment.yaml
+index c5c8d2e..15c7e4b 100644
+--- a/charts/pcai-inference/templates/deployment.yaml
++++ b/charts/pcai-inference/templates/deployment.yaml
+@@ -57,6 +57,26 @@ spec:
+             {{- if .Values.cache.enabled }}
+             - {name: cache, mountPath: /cache}
+             {{- end }}
++        {{- if .Values.localModel.enabled }}
++        - name: local-model-stage
++          image: {{ .Values.checkImage | quote }}
++          command: [python3, -u, /checks/stage.py]
++          env:
++            - {name: LOCAL_MODEL, value: {{ toJson .Values.localModel | quote }}}
++            - {name: LOCAL_SOURCE_ROOT, value: /local-source}
++            - {name: LOCAL_TARGET_ROOT, value: /local-model}
++          resources:
++            requests: {cpu: 100m, memory: 64Mi, ephemeral-storage: {{ .Values.localModel.sizeLimit | quote }}}
++            limits: {cpu: "2", memory: 512Mi, ephemeral-storage: {{ .Values.localModel.sizeLimit | quote }}}
++          securityContext:
++            allowPrivilegeEscalation: false
++            readOnlyRootFilesystem: true
++            capabilities: {drop: [ALL]}
++          volumeMounts:
++            - {name: checks, mountPath: /checks, readOnly: true}
++            - {name: local-source, mountPath: /local-source, readOnly: true}
++            - {name: local-model, mountPath: /local-model}
++        {{- end }}
+       containers:
+         - name: {{ .Values.engine }}
+           image: {{ required "the selected engine needs an image" $engine.image | quote }}
+@@ -104,6 +124,9 @@ spec:
+             - {name: shm, mountPath: /dev/shm}
+             - {name: runtime, mountPath: /runtime}
+             - {name: tmp, mountPath: /tmp}
++            {{- if .Values.localModel.enabled }}
++            - {name: local-model, mountPath: /local-model, readOnly: true}
++            {{- end }}
+             {{- if .Values.cache.enabled }}
+             - {name: cache, mountPath: /cache}
+             {{- end }}
+@@ -165,6 +188,16 @@ spec:
+           persistentVolumeClaim:
+             claimName: {{ required "model.existingClaim is required" .Values.model.existingClaim | quote }}
+             readOnly: true
++        {{- if .Values.localModel.enabled }}
++        - name: local-source
++          persistentVolumeClaim:
++            claimName: {{ required "localModel.existingClaim is required" .Values.localModel.existingClaim | quote }}
++            readOnly: true
++        - name: local-model
++          # Intentionally omit medium: Memory: these are SSD/disk-backed files.
++          emptyDir:
++            sizeLimit: {{ .Values.localModel.sizeLimit | quote }}
++        {{- end }}
+         - name: shm
+           emptyDir:
+             medium: Memory
+diff --git a/charts/pcai-inference/templates/storage-check.yaml b/charts/pcai-inference/templates/storage-check.yaml
+index 8e92ee9..5990a74 100644
+--- a/charts/pcai-inference/templates/storage-check.yaml
++++ b/charts/pcai-inference/templates/storage-check.yaml
+@@ -7,3 +7,7 @@ metadata:
+ data:
+   check.py: |
+     {{- .Files.Get "files/check.py" | nindent 4 }}
++  {{- if .Values.localModel.enabled }}
++  stage.py: |
++    {{- .Files.Get "files/stage.py" | nindent 4 }}
++  {{- end }}
+diff --git a/charts/pcai-inference/values.schema.json b/charts/pcai-inference/values.schema.json
+index 4185920..1e17441 100644
+--- a/charts/pcai-inference/values.schema.json
++++ b/charts/pcai-inference/values.schema.json
+@@ -50,6 +50,46 @@
+         }
+       }
+     },
++    "localModel": {
++      "type": "object",
++      "required": ["enabled"],
++      "additionalProperties": false,
++      "properties": {
++        "enabled": {"type": "boolean"},
++        "existingClaim": {"type": "string"},
++        "sizeLimit": {"$ref": "#/definitions/quantity"},
++        "freeHeadroom": {"$ref": "#/definitions/quantity"},
++        "sourceVerify": {"type": "object"},
++        "files": {"type": "array"}
++      },
++      "if": {"properties": {"enabled": {"const": true}}},
++      "then": {
++        "required": ["existingClaim", "sizeLimit", "freeHeadroom", "sourceVerify", "files"],
++        "properties": {
++          "existingClaim": {"$ref": "#/definitions/name"},
++          "sourceVerify": {
++            "allOf": [
++              {"$ref": "#/properties/model/properties/verify"},
++              {"properties": {"enabled": {"const": true}}}
++            ]
++          },
++          "files": {
++            "minItems": 1,
++            "maxItems": 16,
++            "items": {
++              "type": "object",
++              "required": ["path", "size", "sha256"],
++              "additionalProperties": false,
++              "properties": {
++                "path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
++                "size": {"type": "integer", "minimum": 1},
++                "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
++              }
++            }
++          }
++        }
++      }
++    },
+     "apiKey": {
+       "type": "object",
+       "required": ["existingSecret", "secretKey"],
+@@ -113,6 +153,13 @@
+     }
+   },
+   "allOf": [
++    {
++      "if": {"required": ["localModel"], "properties": {"localModel": {"properties": {"enabled": {"const": true}}}}},
++      "then": {"properties": {"resources": {"properties": {
++        "requests": {"required": ["ephemeral-storage"]},
++        "limits": {"required": ["ephemeral-storage"]}
++      }}}}
++    },
+     {"if": {"properties": {"engine": {"const": "vllm"}}}, "then": {"required": ["vllm"]}},
+     {"if": {"properties": {"engine": {"const": "sglang"}}}, "then": {"required": ["sglang"]}}
+   ]
+diff --git a/charts/pcai-inference/values.yaml b/charts/pcai-inference/values.yaml
+index d2574b5..39807fd 100644
+--- a/charts/pcai-inference/values.yaml
++++ b/charts/pcai-inference/values.yaml
+@@ -104,6 +104,16 @@ model:
+     bytes: 166898661074
+     markerId: b9686c13-35ff-4c66-8e63-c10ab2bf0c87
+ 
++# Optional selected-file staging to disk-backed emptyDir at /local-model.
++# Files must carry SHA256 + exact size, and the source PVC needs a pinned receipt.
++localModel:
++  enabled: false
++  sizeLimit: 230Gi
++  freeHeadroom: 32Gi
++  existingClaim: ""
++  sourceVerify: {enabled: true}
++  files: []
++
+ # Existing Secret with the bearer key clients must send.
+ apiKey:
+   existingSecret: vllm-deepseek-api
+diff --git a/checks/test_local_model.py b/checks/test_local_model.py
+new file mode 100644
+index 0000000..c5b6e72
+--- /dev/null
++++ b/checks/test_local_model.py
+@@ -0,0 +1,121 @@
++import copy
++import hashlib
++import importlib.util
++import json
++from pathlib import Path
++import sys
++import tempfile
++import unittest
++from unittest.mock import patch
++
++from test_chart import render, deployment
++
++FILES = Path(__file__).resolve().parents[1] / 'charts/pcai-inference/files'
++sys.path.insert(0, str(FILES))
++import stage
++
++RECEIPT = dict(enabled=True, revision='a' * 40, manifestSha256='b' * 64,
++               markerId='test-marker', files=1, bytes=100)
++
++
++def config(data=b'test'):
++    return dict(enabled=True, existingClaim='original-model', sizeLimit='230Gi', freeHeadroom='1',
++                sourceVerify=RECEIPT, files=[dict(path='table.safetensors', size=len(data),
++                sha256=hashlib.sha256(data).hexdigest())])
++
++
++class LocalModelChart(unittest.TestCase):
++    def test_disabled_default(self):
++        spec = deployment(render())['spec']['template']['spec']
++        self.assertNotIn('local-model', [v['name'] for v in spec['volumes']])
++        self.assertEqual(len(spec['initContainers']), 1)
++
++    def test_disk_volume_and_readonly_source(self):
++        docs = render({'localModel': config(), 'resources': {
++            'requests': {'ephemeral-storage': '240Gi'}, 'limits': {'ephemeral-storage': '260Gi'}}})
++        spec = deployment(docs)['spec']['template']['spec']
++        vols = {v['name']: v for v in spec['volumes']}
++        self.assertEqual(vols['local-model']['emptyDir'], {'sizeLimit': '230Gi'})
++        self.assertTrue(vols['local-source']['persistentVolumeClaim']['readOnly'])
++        main = spec['containers'][0]
++        mounts = {m['name']: m for m in main['volumeMounts']}
++        self.assertTrue(mounts['local-model']['readOnly'])
++        self.assertNotIn('local-source', mounts)
++        init = spec['initContainers'][1]
++        self.assertTrue(init['securityContext']['readOnlyRootFilesystem'])
++        mounts = {m['name']: m for m in init['volumeMounts']}
++        self.assertTrue(mounts['local-source']['readOnly'])
++        self.assertNotIn('nvidia.com/gpu', init['resources']['limits'])
++
++    def test_reject_unpinned_or_unreserved_staging(self):
++        render({'localModel': config()}, success=False)
++        for field, value in [('existingClaim', ''), ('files', []), ('sourceVerify', {'enabled': False})]:
++            c = config()
++            c[field] = value
++            render({'localModel': c}, success=False)
++
++
++class Staging(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.root = Path(self.tmp.name)
++        self.source = self.root / 'source'
++        self.target = self.root / 'target'
++        self.source.mkdir()
++        (self.source / '.pcai-preparation').mkdir()
++        done = dict(revision=RECEIPT['revision'], manifest_sha256=RECEIPT['manifestSha256'],
++                    storage_marker_id=RECEIPT['markerId'], files=1, bytes=100)
++        (self.source / '.pcai-preparation/complete.json').write_text(json.dumps(done))
++        revision = self.source / 'revisions' / RECEIPT['revision']
++        revision.mkdir(parents=True)
++        (revision / 'table.safetensors').write_bytes(b'test')
++        self.env = dict(LOCAL_MODEL=json.dumps(config()), LOCAL_SOURCE_ROOT=str(self.source),
++                        LOCAL_TARGET_ROOT=str(self.target))
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def test_copy_hash_and_idempotency(self):
++        stage.stage(self.env, require_readonly=False)
++        self.assertEqual((self.target / 'table.safetensors').read_bytes(), b'test')
++        with patch.object(stage, 'copy_verified', side_effect=AssertionError('copied twice')):
++            stage.stage(self.env, require_readonly=False)
++        self.assertTrue((self.target / '.pcai-stage-complete.json').is_file())
++        self.assertFalse(list(self.target.glob('*.partial')))
++
++    def test_integrity_failure_never_commits(self):
++        c = config()
++        c['files'][0]['sha256'] = '0' * 64
++        self.env['LOCAL_MODEL'] = json.dumps(c)
++        with self.assertRaisesRegex(ValueError, 'integrity'):
++            stage.stage(self.env, require_readonly=False)
++        self.assertFalse((self.target / 'table.safetensors').exists())
++        self.assertFalse((self.target / '.pcai-stage-complete.json').exists())
++        self.assertFalse(list(self.target.glob('*.partial')))
++
++    def test_receipt_mismatch(self):
++        c = config()
++        c['sourceVerify'] = dict(RECEIPT, markerId='wrong')
++        self.env['LOCAL_MODEL'] = json.dumps(c)
++        with self.assertRaisesRegex(ValueError, 'receipt'):
++            stage.stage(self.env, require_readonly=False)
++
++    def test_source_must_be_readonly(self):
++        with self.assertRaisesRegex(ValueError, 'read-only'):
++            stage.stage(self.env)
++
++    def test_path_traversal(self):
++        for name in ['../elsewhere', '/absolute', '.', 'dir/file']:
++            with self.assertRaises(ValueError):
++                stage.pinned_file(self.target, name)
++
++    def test_insufficient_space(self):
++        c = config()
++        c['freeHeadroom'] = '999Ti'
++        self.env['LOCAL_MODEL'] = json.dumps(c)
++        with self.assertRaisesRegex(ValueError, 'free space'):
++            stage.stage(self.env, require_readonly=False)
++
++
++if __name__ == '__main__':
++    unittest.main()
+-- 
+2.43.0
+
