@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: pcai-embed-offload
+Version: 1.0
+Summary: Offload DeepSeek V4 embed_tokens through the vLLM UVA offloader

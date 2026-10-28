@@ -19,6 +19,9 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
    - **SHM notification backlog** ([#63165](https://github.com/vllm-project/vllm/pull/63165), head `d3ada0390ca556e62150a3c751cdd893a2306ebf`) — poll busy readers' notification sockets to bound the libzmq command backlog.
    - **Sliding-window admission** ([#60045](https://github.com/vllm-project/vllm/pull/60045), head `843db1462a066076d407bb628098140da4455be5`) — count held physical blocks, not null-padded positions, when reserving capacity for asynchronous KV loads.
    - **Eager CPU-cache LRU** ([#62444](https://github.com/vllm-project/vllm/pull/62444), head `a7f3bd29157fb6c96a1eff083cf8fc14136be624`) — refresh CPU-copy recency when a prefix hits on GPU, keeping hot RAM copies from being evicted first.
+   - **Host-tier load ordering** ([#60078](https://github.com/vllm-project/vllm/pull/60078), head `520208b140dbca471a76c752598b6fff2f8a7092`) — make SimpleCPUOffload loads wait for queued compute that still reads the destination blocks (the race async scheduling exposes).
+
+   Plugin **`pcai_embed_offload`** (`plugins/`): with `--offload-backend uva --cpu-offload-params ... embed_tokens`, DeepSeek V4's embedding table moves to pinned host memory (about 0.5 GiB per GPU at TP2). vLLM offloads decoder layers and vision towers through `--cpu-offload-params`, but not the embedding. Inactive unless requested.
 
    The base supplies the EOS reasoning-leak fix ([#48748](https://github.com/vllm-project/vllm/pull/48748)); the image checks it with a regression assertion rather than another patch.
 

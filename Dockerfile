@@ -323,3 +323,29 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     python3 /tmp/verify_swa_admission_patch.py "$VLLM_DIR"; \
     rm -f /tmp/offload-fix.patch /tmp/verify_swa_admission_patch.py
+
+# Order SimpleCPUOffload loads after queued compute reads of the destination blocks.
+# Needed for async scheduling with the host KV tier (speculative steps still reading a block).
+# vllm#60078 production-only diff, head 520208b140dbca471a76c752598b6fff2f8a7092.
+# CPU tripwire checks isolated source behavior; GPU serving remains unqualified.
+COPY patches/60078-simple-offload-load-after-compute.patch /tmp/offload-fix.patch
+COPY diag/verify_simple_offload_load_order_patch.py /tmp/verify_simple_offload_load_order_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "6efcda2d6eead265dca1c14b1c27175809b5e523226ff15ee10860c4fcd624dc"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
+    else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_simple_offload_load_order_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/offload-fix.patch /tmp/verify_simple_offload_load_order_patch.py
+
+# Plugin: '--cpu-offload-params ... embed_tokens' puts DeepSeek V4's embedding table in pinned
+# host memory through vLLM's UVA offloader (vLLM offloads layers and towers, never the embedding).
+# Inactive unless that parameter is requested.
+COPY plugins/pcai_embed_offload /tmp/pcai_embed_offload
+COPY diag/verify_embed_offload_plugin.py /tmp/verify_embed_offload_plugin.py
+RUN set -eux; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
+    python3 /tmp/verify_embed_offload_plugin.py "$VLLM_DIR"; \
+    rm -rf /tmp/pcai_embed_offload /tmp/verify_embed_offload_plugin.py
