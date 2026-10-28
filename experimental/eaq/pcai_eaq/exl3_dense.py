@@ -138,7 +138,7 @@ def install():
     from vllm.model_executor.model_loader.default_loader import DefaultModelLoader
     from vllm_exl3 import exl3 as plugin
 
-    logger = init_logger(__name__)
+    logger = init_logger("vllm." + __name__)
     if getattr(DefaultModelLoader, "_pcai_exl3_dense", False):
         return
     # Dense linears and the LM head become ordinary unquantized (BF16) layers.

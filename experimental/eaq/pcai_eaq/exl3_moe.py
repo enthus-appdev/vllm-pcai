@@ -94,7 +94,7 @@ def install(diag=False):
     from vllm.logger import init_logger
     from vllm_exl3 import exl3 as plugin
 
-    logger = init_logger(__name__)
+    logger = init_logger("vllm." + __name__)
     original = plugin.build_exl3_fused_state
     if getattr(original, "_pcai_wrapped", False):
         return
