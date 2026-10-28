@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pcai-eaq"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "Experimental eager-only disk Engram qualification adapter"
+
+[project.entry-points."vllm.general_plugins"]
+pcai_eaq = "pcai_eaq:register"
+
+[tool.setuptools.packages.find]
+include = ["pcai_eaq*"]
