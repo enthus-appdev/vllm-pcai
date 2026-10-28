@@ -4,7 +4,7 @@ Custom [vLLM](https://github.com/vllm-project/vllm) images for **HPE Private Clo
 
 ## Why this image exists
 
-PCAI cannot mount volumes through its UI, so anything a model needs at runtime that isn't in the base `vllm/vllm-openai` image **must be baked in**. This image adds four layers on top of the stock vLLM base:
+PCAI's **MLIS** UI cannot mount our volumes, so templates and patches needed by those deployments **must be baked in**. Custom-framework charts can mount PVCs; that is a separate deployment path, not a limitation of this image. This image adds four layers on top of the stock vLLM base:
 
 1. **Enhanced chat templates** — Qwen3.5/3.6 hardened templates (hidden historical reasoning, XML tool-call formatting, proper ` response` handling) from [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image. (Gemma 4 uses vLLM's **in-image** template at `/vllm-workspace/examples/tool_chat_template_gemma4.jinja`.)
 
@@ -46,9 +46,11 @@ vllm-pcai/
 | `/templates/qwen3.5-enhanced.jinja` | this image (allanchan339 fix) |
 | `/vllm-workspace/examples/*.jinja` | stock vLLM templates (incl. Gemma 4) |
 
-## Model-specific deployment configs
+## Serving documentation and research
 
-Operational knowledge — validated serve args, performance figures, and issue history — is documented in a separate internal repo.
+[pcai-llm-serving](https://github.com/enthus-appdev/pcai-llm-serving) is the canonical home for validated serve arguments, model measurements, issue histories and research evidence. It groups model-specific material under `models/<group>/` and cross-cutting engine, platform and hardware research under `research/<topic>/`.
+
+Keep this repository focused on the image: build instructions, templates, patches, diagnostics and tests. Research reports formerly stored at this top level have moved to the serving-documentation repository; follow its README index rather than maintaining duplicate copies here.
 
 ## Clone
 
