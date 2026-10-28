@@ -1,7 +1,7 @@
 From 001f6df2192768582777d4cbd4908d48dc124761 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:12:34 +0100
-Subject: [PATCH 1/6] feat: add hash-verified local model staging
+Subject: [PATCH 1/7] feat: add hash-verified local model staging
 
 ---
  LOCAL-MODEL-STAGING.md                        |  36 ++++++
@@ -477,7 +477,7 @@ index 0000000..c5b6e72
 From cedd8f23712c010ab4d28c93b9e724ed2d7fb5ec Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:41:59 +0100
-Subject: [PATCH 2/6] build: exclude Python cache files from chart archives
+Subject: [PATCH 2/7] build: exclude Python cache files from chart archives
 
 ---
  charts/pcai-inference/.helmignore | 4 ++++
@@ -498,7 +498,7 @@ index 0000000..2c44691
 From 1d8bae20be9ecfa8ca9df5e498f2aad17df119c3 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:04:08 +0100
-Subject: [PATCH 3/6] fix: make exact EAQ preparation settings the chart
+Subject: [PATCH 3/7] fix: make exact EAQ preparation settings the chart
  defaults
 
 ---
@@ -1029,7 +1029,7 @@ index c5b6e72..c826206 100644
 From 18d6e18c0be3c1f2ced938cd242ca33960bb4fdc Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:41:42 +0100
-Subject: [PATCH 4/6] fix: keep the chart generic and inference-only
+Subject: [PATCH 4/7] fix: keep the chart generic and inference-only
 
 ---
  README.md                                 |   4 +-
@@ -1425,7 +1425,7 @@ index 08c029a..75d940e 100644
 From 926a00a4fea6fe5c183d585d1227c09b32a6044e Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:52:33 +0100
-Subject: [PATCH 5/6] feat: route inference through the PCAI platform gateway
+Subject: [PATCH 5/7] feat: route inference through the PCAI platform gateway
 
 ---
  README.md                                     |  3 +-
@@ -1613,7 +1613,7 @@ index 75d940e..5415f7e 100644
 From 1092f610df1c73b04861fe66bafc36ac4b3d55f2 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 16:14:37 +0100
-Subject: [PATCH 6/6] refactor: typed, minimal chart values; verification from
+Subject: [PATCH 6/7] refactor: typed, minimal chart values; verification from
  the prepared volumes
 
 ---
@@ -3989,3 +3989,80 @@ index d44ca1b..0000000
 -
 -if __name__ == "__main__":
 -    unittest.main(verbosity=2)
+
+From a20c29e19e5147a5161b3d0fa6df6dbeb13dc465 Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 16:20:04 +0100
+Subject: [PATCH 7/7] fix: render integer serving limits without exponent
+ notation
+
+---
+ charts/pcai-inference/templates/_helpers.tpl | 23 ++++++++++++--------
+ checks/test_chart.py                         |  7 ++++++
+ 2 files changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/charts/pcai-inference/templates/_helpers.tpl b/charts/pcai-inference/templates/_helpers.tpl
+index b075549..27b6288 100644
+--- a/charts/pcai-inference/templates/_helpers.tpl
++++ b/charts/pcai-inference/templates/_helpers.tpl
+@@ -20,6 +20,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
+ {{- if .Values.compileCache.enabled -}}/cache/{{ .Values.engine }}{{- else -}}/runtime/cache-{{ .Values.engine }}{{- end -}}
+ {{- end -}}
+
++{{/* A number as a command-line string: integers without exponent (1048576, not 1.048576e+06). */}}
++{{- define "inference.num" -}}
++{{- if eq (float64 .) (float64 (int64 .)) -}}{{ int64 . }}{{- else -}}{{ . }}{{- end -}}
++{{- end -}}
++
+ {{/* Engine command line: flags derived from the typed values, then extraArgs. */}}
+ {{- define "inference.args" -}}
+ {{- $s := .Values.serving | default dict -}}
+@@ -29,21 +34,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
+ {{- $args = concat (list (include "inference.modelPath" .) "--served-model-name") .Values.model.servedNames -}}
+ {{- $args = concat $args (list "--port" "8080" "--tensor-parallel-size" $gpus) -}}
+ {{- if gt (int .Values.gpus) 1 }}{{ $args = concat $args (list "--distributed-executor-backend" "mp") }}{{ end -}}
+-{{- with $s.maxModelLen }}{{ $args = concat $args (list "--max-model-len" (toString .)) }}{{ end -}}
+-{{- with $s.maxNumSeqs }}{{ $args = concat $args (list "--max-num-seqs" (toString .)) }}{{ end -}}
+-{{- with $s.maxNumBatchedTokens }}{{ $args = concat $args (list "--max-num-batched-tokens" (toString .)) }}{{ end -}}
+-{{- with $s.gpuMemoryUtilization }}{{ $args = concat $args (list "--gpu-memory-utilization" (toString .)) }}{{ end -}}
++{{- with $s.maxModelLen }}{{ $args = concat $args (list "--max-model-len" (include "inference.num" .)) }}{{ end -}}
++{{- with $s.maxNumSeqs }}{{ $args = concat $args (list "--max-num-seqs" (include "inference.num" .)) }}{{ end -}}
++{{- with $s.maxNumBatchedTokens }}{{ $args = concat $args (list "--max-num-batched-tokens" (include "inference.num" .)) }}{{ end -}}
++{{- with $s.gpuMemoryUtilization }}{{ $args = concat $args (list "--gpu-memory-utilization" (include "inference.num" .)) }}{{ end -}}
+ {{- with $s.hostOffload }}
+-{{- $args = concat $args (list "--offload-backend" "uva" "--cpu-offload-gb" (toString .gibPerGpu)) -}}
++{{- $args = concat $args (list "--offload-backend" "uva" "--cpu-offload-gb" (include "inference.num" .gibPerGpu)) -}}
+ {{- with .params }}{{ $args = concat $args (list "--cpu-offload-params") . }}{{ end -}}
+ {{- end -}}
+ {{- else -}}
+ {{- $args = list "--model-path" (include "inference.modelPath" .) "--served-model-name" (first .Values.model.servedNames) -}}
+ {{- $args = concat $args (list "--host" "0.0.0.0" "--port" "8080" "--tp-size" $gpus) -}}
+-{{- with $s.maxModelLen }}{{ $args = concat $args (list "--context-length" (toString .)) }}{{ end -}}
+-{{- with $s.maxNumSeqs }}{{ $args = concat $args (list "--max-running-requests" (toString .)) }}{{ end -}}
+-{{- with $s.maxNumBatchedTokens }}{{ $args = concat $args (list "--chunked-prefill-size" (toString .)) }}{{ end -}}
+-{{- with $s.gpuMemoryUtilization }}{{ $args = concat $args (list "--mem-fraction-static" (toString .)) }}{{ end -}}
++{{- with $s.maxModelLen }}{{ $args = concat $args (list "--context-length" (include "inference.num" .)) }}{{ end -}}
++{{- with $s.maxNumSeqs }}{{ $args = concat $args (list "--max-running-requests" (include "inference.num" .)) }}{{ end -}}
++{{- with $s.maxNumBatchedTokens }}{{ $args = concat $args (list "--chunked-prefill-size" (include "inference.num" .)) }}{{ end -}}
++{{- with $s.gpuMemoryUtilization }}{{ $args = concat $args (list "--mem-fraction-static" (include "inference.num" .)) }}{{ end -}}
+ {{- if $s.hostOffload }}{{ fail "serving.hostOffload is supported only for engine vllm" }}{{ end -}}
+ {{- end -}}
+ {{- toYaml (concat $args (.Values.extraArgs | default list)) -}}
+diff --git a/checks/test_chart.py b/checks/test_chart.py
+index 3498a61..e119fb1 100644
+--- a/checks/test_chart.py
++++ b/checks/test_chart.py
+@@ -178,6 +178,13 @@ class Options(unittest.TestCase):
+         self.assertEqual([c["name"] for c in pod(docs)["initContainers"]], ["storage-check"])
+         self.assertNotIn("staged", [v["name"] for v in pod(docs)["volumes"]])
+
++    def test_large_numbers_render_as_integers(self):
++        a = engine(render({"serving": {"maxModelLen": 1048576, "gpuMemoryUtilization": 0.95,
++                                       "hostOffload": {"gibPerGpu": 68.5}}}))["args"]
++        self.assertEqual(flag(a, "--max-model-len"), "1048576")
++        self.assertEqual(flag(a, "--gpu-memory-utilization"), "0.95")
++        self.assertEqual(flag(a, "--cpu-offload-gb"), "68.5")
++
+     def test_serving_value_can_be_unset(self):
+         a = engine(render({"serving": {"maxNumSeqs": None}}))["args"]
+         self.assertNotIn("--max-num-seqs", a)
