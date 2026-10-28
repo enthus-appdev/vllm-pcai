@@ -349,3 +349,23 @@ RUN set -eux; \
     cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
     python3 /tmp/verify_embed_offload_plugin.py "$VLLM_DIR"; \
     rm -rf /tmp/pcai_embed_offload /tmp/verify_embed_offload_plugin.py
+
+# #62751 da37621 + #61875 1ef812f + #62816 b6e146e, production code only.
+# Upgrade only Humming; keep the base Torch/CUDA dependencies unchanged.
+# PyPI manylinux x86_64 cp310-abi3 wheel, pinned by hash; no source build fallback.
+RUN set -eux; \
+    printf '%s\n' 'humming-kernels[cu13]==0.1.18 --hash=sha256:3eee5f7365457708a8962c852a4c797d99439a450dfe16fee47cc39664d080d4' > /tmp/humming-requirement.txt; \
+    if command -v uv >/dev/null 2>&1; then uv pip install --system --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; \
+    else python3 -m pip install --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; fi; \
+    rm -f /tmp/humming-requirement.txt
+
+COPY patches/vision-fp8-moe-v032.patch /tmp/fp8-moe.patch
+COPY diag/verify_fp8_moe_patch.py /tmp/verify_fp8_moe_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/fp8-moe.patch | cut -d' ' -f1)" = "ffa8397c9ddea324e74f4ef259d3d799a5425eca69f56e08a8125683cdbe31d2"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/fp8-moe.patch; \
+    else patch -p1 -d "$SITE" < /tmp/fp8-moe.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_fp8_moe_patch.py "$VLLM_DIR" --installed; \
+    rm -f /tmp/fp8-moe.patch /tmp/verify_fp8_moe_patch.py

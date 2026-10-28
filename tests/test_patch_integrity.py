@@ -91,6 +91,23 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
         self.assertIn("python3 /tmp/verify_swa_admission_patch.py", dockerfile)
 
+    def test_pinned_fp8_moe_bundle(self):
+        patch = ROOT / "patches/vision-fp8-moe-v032.patch"
+        digest = "ffa8397c9ddea324e74f4ef259d3d799a5425eca69f56e08a8125683cdbe31d2"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
+        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
+                 if line.startswith("diff --git ")}
+        self.assertEqual(paths, {"vllm/model_executor/layers/fused_moe/oracle/mxfp4.py",
+                                 "vllm/models/deepseek_v4/quant_config.py",
+                                 "vllm/models/deepseek_v41/quant_config.py", "vllm/utils/humming.py"})
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn(digest, dockerfile)
+        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
+        self.assertIn("python3 /tmp/verify_fp8_moe_patch.py", dockerfile)
+        self.assertIn("humming-kernels[cu13]==0.1.18", dockerfile)
+        self.assertIn("--no-deps --only-binary=:all: --require-hashes", dockerfile)
+        self.assertIn("3eee5f7365457708a8962c852a4c797d99439a450dfe16fee47cc39664d080d4", dockerfile)
+
     def test_git_can_parse_every_patch(self):
         patches = sorted((ROOT / "patches").glob("*.patch"))
         self.assertTrue(patches, "No vendored patches found")

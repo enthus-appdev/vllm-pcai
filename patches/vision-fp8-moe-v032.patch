@@ -1,0 +1,195 @@
+diff --git a/vllm/model_executor/layers/fused_moe/oracle/mxfp4.py b/vllm/model_executor/layers/fused_moe/oracle/mxfp4.py
+index 067b88e..c93a0bc 100644
+--- a/vllm/model_executor/layers/fused_moe/oracle/mxfp4.py
++++ b/vllm/model_executor/layers/fused_moe/oracle/mxfp4.py
+@@ -495,6 +495,32 @@ def _resolve_activation_key(
+     )
+ 
+ 
++def _humming_input_schema(model_activation_key: QuantKey | None):
++    """Humming input schema for the checkpoint activation combined with the
++    user override, or None to keep Humming's default (BF16 or the
++    VLLM_HUMMING_INPUT_QUANT_CONFIG env override, which wins)."""
++    activation_key = _resolve_activation_key(model_activation_key)
++    if activation_key is None or envs.VLLM_HUMMING_INPUT_QUANT_CONFIG:
++        return None
++    if (
++        activation_key == kMxfp8Dynamic
++        and _user_moe_activation_override() is None
++        and current_platform.is_device_capability_family(90)
++    ):
++        # Humming's SM90 W4A8 kernels are tuned for block FP8 activations, so
++        # run a checkpoint's MXFP8 that way. An explicit request is honored.
++        logger.info_once(
++            "Running checkpoint MXFP8 MoE activations as block FP8 "
++            "(group 128) on Hopper."
++        )
++        activation_key = kFp8Dynamic128Sym
++    from vllm.model_executor.layers.quantization.utils.humming import (
++        quant_key_to_input_schema,
++    )
++
++    return quant_key_to_input_schema(activation_key)
++
++
+ def _make_log_backend(backend: Mxfp4MoeBackend) -> str:
+     return f"Using '{backend.value}' Mxfp4 MoE backend."
+ 
+@@ -502,9 +528,14 @@ def _make_log_backend(backend: Mxfp4MoeBackend) -> str:
+ def _warn_on_bf16_fallback(
+     backend: Mxfp4MoeBackend, requested_activation_key: QuantKey | None
+ ) -> None:
++    # Humming quantizes activations itself to the user's override.
++    applies_request = backend == Mxfp4MoeBackend.EMULATION or (
++        backend == Mxfp4MoeBackend.HUMMING
++        and requested_activation_key == _user_moe_activation_override()
++    )
+     if (
+         requested_activation_key is not None
+-        and backend != Mxfp4MoeBackend.EMULATION
++        and not applies_request
+         and _backend_activation_key(backend) is None
+     ):
+         logger.warning_once(
+@@ -946,7 +977,10 @@ def convert_gpt_oss_weight_to_mxfp4_moe_kernel_format(
+         )
+ 
+         convert_to_humming_moe_kernel_format(
+-            layer, quant_config={"quant_method": "gpt_oss_mxfp4"}
++            layer,
++            quant_config={"quant_method": "gpt_oss_mxfp4"},
++            input_schema=_humming_input_schema(None),
++            allow_input_schema_fallback=False,
+         )
+         return (
+             layer.w13_weight,
+@@ -1542,19 +1576,10 @@ def convert_weight_to_mxfp4_moe_kernel_format(
+             convert_to_humming_moe_kernel_format,
+         )
+ 
+-        # The env override wins; otherwise use the checkpoint's activation
+-        # scheme instead of Humming's default BF16 activations.
+-        input_schema = None
+-        if activation_key is not None and not envs.VLLM_HUMMING_INPUT_QUANT_CONFIG:
+-            from vllm.model_executor.layers.quantization.utils.humming import (
+-                quant_key_to_input_schema,
+-            )
+-
+-            input_schema = quant_key_to_input_schema(activation_key)
+         convert_to_humming_moe_kernel_format(
+             layer,
+             quant_config={"quant_method": "mxfp4"},
+-            input_schema=input_schema,
++            input_schema=_humming_input_schema(activation_key),
+             allow_input_schema_fallback=False,
+         )
+         return (
+diff --git a/vllm/models/deepseek_v4/quant_config.py b/vllm/models/deepseek_v4/quant_config.py
+index f3aaf72..7900a6e 100644
+--- a/vllm/models/deepseek_v4/quant_config.py
++++ b/vllm/models/deepseek_v4/quant_config.py
+@@ -16,6 +16,7 @@ from vllm.model_executor.layers.quantization.fp8 import Fp8Config
+ from vllm.model_executor.layers.quantization.mxfp4 import Mxfp4MoEMethod
+ from vllm.model_executor.layers.quantization.utils.quant_utils import (
+     is_layer_skipped,
++    kMxfp8Dynamic,
+ )
+ 
+ _DEEPSEEK_V4_EXPERT_DTYPES = ("fp4", "fp8")
+@@ -193,7 +194,7 @@ class DeepseekV4FP8Config(Fp8Config):
+                         quant_config=self._get_nvfp4_config(),
+                         moe_config=layer.moe_config,
+                     )
+-                return Mxfp4MoEMethod(layer.moe_config)
++                return Mxfp4MoEMethod(layer.moe_config, activation_key=kMxfp8Dynamic)
+             # expert_dtype == "fp8": fall through to Fp8Config which
+             # returns Fp8MoEMethod with block-wise float32 scales.
+         return super().get_quant_method(layer, prefix)
+diff --git a/vllm/models/deepseek_v41/quant_config.py b/vllm/models/deepseek_v41/quant_config.py
+index 1d92943..b9919e5 100644
+--- a/vllm/models/deepseek_v41/quant_config.py
++++ b/vllm/models/deepseek_v41/quant_config.py
+@@ -258,7 +258,7 @@ class DeepseekV4FP8Config(Fp8Config):
+                         quant_config=self._get_nvfp4_config(),
+                         moe_config=layer.moe_config,
+                     )
+-                return Mxfp4MoEMethod(layer.moe_config)
++                return Mxfp4MoEMethod(layer.moe_config, activation_key=kMxfp8Dynamic)
+             # expert_dtype == "fp8": fall through to Fp8Config which
+             # returns Fp8MoEMethod with block-wise float32 scales.
+         return super().get_quant_method(layer, prefix)
+diff --git a/vllm/utils/humming.py b/vllm/utils/humming.py
+index 0cd80a9..8004812 100644
+--- a/vllm/utils/humming.py
++++ b/vllm/utils/humming.py
+@@ -109,70 +109,10 @@ def create_humming_locks(device: torch.device | str) -> torch.Tensor:
+     )
+ 
+ 
+-_patched = False
+-
+-
+-def _patch_humming() -> None:
+-    """Make humming's per-call ``DeviceInfo(device)`` lookups traceable.
+-
+-    The forward path (``LayerConfig.check_device``, PDL heuristics) builds a
+-    ``DeviceInfo`` on every call, which breaks vLLM's fullgraph compile:
+-    Dynamo recurses forever in ``DeviceInfo.__getattr__``
+-    (vllm-project/humming#147) and, with that fixed (#148), still cannot
+-    trace the extension's ``_DeviceInfo`` constructor. Hand out one cached
+-    instance per device instead; ``prepare_layer_config`` creates it eagerly
+-    during weight processing.
+-
+-    TODO: remove after bumping humming to a release with
+-    vllm-project/humming#149.
+-    """
+-    global _patched
+-    if _patched:
+-        return
+-    _patched = True
+-
+-    import humming.config.config
+-    import humming.transform
+-    import humming.tune
+-    import humming.tune.process_input
+-    import humming.utils.smem
+-    from humming.device import DeviceInfo, get_device_index
+-
+-    def __getattr__(self, name: str) -> Any:
+-        if name.startswith("_"):
+-            raise AttributeError(
+-                f"{type(self).__name__!r} object has no attribute {name!r}"
+-            )
+-        return getattr(self._get_value(), name)
+-
+-    DeviceInfo.__getattr__ = __getattr__
+-
+-    device_infos: dict[int, DeviceInfo] = {}
+-
+-    def cached_device_info(index: int | torch.device | None = None) -> DeviceInfo:
+-        if isinstance(index, torch.device) and index.type != "cuda":
+-            return DeviceInfo(index)
+-        device_index = get_device_index(index)
+-        if device_index not in device_infos:
+-            device_infos[device_index] = DeviceInfo(device_index)
+-        return device_infos[device_index]
+-
+-    for module in (
+-        humming.config.config,
+-        humming.transform,
+-        humming.tune,
+-        humming.tune.process_input,
+-        humming.utils.smem,
+-    ):
+-        if getattr(module, "DeviceInfo", None) is DeviceInfo:
+-            module.DeviceInfo = cached_device_info
+-
+-
+ def __getattr__(name: str) -> Any:
+     spec = _EXPORTS.get(name)
+     if spec is None:
+         raise AttributeError(f"module 'vllm.utils.humming' has no attribute {name!r}")
+-    _patch_humming()
+     if ":" in spec:
+         mod_path, attr = spec.split(":", 1)
+         obj = getattr(importlib.import_module(mod_path), attr)

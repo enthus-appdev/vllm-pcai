@@ -27,6 +27,33 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
+## Experimental Hopper FP8 MoE activation image
+
+This branch adds only the FP8 activation bundle to image PR #62's source baseline:
+- [#62751](https://github.com/vllm-project/vllm/pull/62751), head `da3762163f542e5ca347dc358d976c86a795b1dc`: shared Humming activation-schema resolution.
+- [#61875](https://github.com/vllm-project/vllm/pull/61875), head `1ef812f7be96f5ce000fb002e8c8edc74e122cb1`: DeepSeek V4/V4.1 checkpoint MXFP8 resolves to **block FP8 group128 on SM90** by default.
+- [#62816](https://github.com/vllm-project/vllm/pull/62816), head `b6e146e7f32597af02621c5576fffcfcee497a28`: Humming **0.1.18** and removal of the obsolete DeviceInfo workaround.
+
+Production hunks are unchanged; the requirements-file bump is implemented as a
+hash-pinned x86_64 wheel installation with `--no-deps`, preserving the base Torch
+and CUDA dependency set. The bundle is `patches/vision-fp8-moe-v032.patch`.
+
+**FP8 test:** select `--moe-backend humming`, leave
+`VLLM_HUMMING_INPUT_QUANT_CONFIG` unset, and do not set
+`--quantization-config.moe.activation mxfp8` (an explicit override requests
+group32 instead). Expect the log:
+`Running checkpoint MXFP8 MoE activations as block FP8 (group 128) on Hopper.`
+
+**Same-image BF16 control:** set
+`VLLM_HUMMING_INPUT_QUANT_CONFIG='{"allow_fallback": true}'`, as in the upstream
+A/B. This image changes Humming as well as the activation policy; comparison
+against a prior image alone does not isolate the dependency upgrade.
+
+CPU tripwires check default/override resolution with stand-ins, model declaration,
+installed package version and base Torch version. They do not execute Humming
+kernels or qualify numerical accuracy, graph compilation or performance.
+Run `python3 -m unittest discover -s tests -v` locally.
+
 ## Base image: `v0.32.0`
 
 The `FROM` uses the **[v0.32.0 release](https://github.com/vllm-project/vllm/releases/tag/v0.32.0)**. This retains the ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, packed heterogeneous-KV support, and OffloadingConnector bounds fix ([#52923](https://github.com/vllm-project/vllm/pull/52923)). It also updates Hopper's quantization backend selection; performance still requires workload-specific GPU validation. Building or publishing this image does not redeploy an existing model service.
