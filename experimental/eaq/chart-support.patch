@@ -1,7 +1,7 @@
 From 001f6df2192768582777d4cbd4908d48dc124761 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:12:34 +0100
-Subject: [PATCH 1/4] feat: add hash-verified local model staging
+Subject: [PATCH 1/5] feat: add hash-verified local model staging
 
 ---
  LOCAL-MODEL-STAGING.md                        |  36 ++++++
@@ -477,7 +477,7 @@ index 0000000..c5b6e72
 From cedd8f23712c010ab4d28c93b9e724ed2d7fb5ec Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:41:59 +0100
-Subject: [PATCH 2/4] build: exclude Python cache files from chart archives
+Subject: [PATCH 2/5] build: exclude Python cache files from chart archives
 
 ---
  charts/pcai-inference/.helmignore | 4 ++++
@@ -498,7 +498,7 @@ index 0000000..2c44691
 From 1d8bae20be9ecfa8ca9df5e498f2aad17df119c3 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:04:08 +0100
-Subject: [PATCH 3/4] fix: make exact EAQ preparation settings the chart
+Subject: [PATCH 3/5] fix: make exact EAQ preparation settings the chart
  defaults
 
 ---
@@ -1029,7 +1029,7 @@ index c5b6e72..c826206 100644
 From 18d6e18c0be3c1f2ced938cd242ca33960bb4fdc Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:41:42 +0100
-Subject: [PATCH 4/4] fix: keep the chart generic and inference-only
+Subject: [PATCH 4/5] fix: keep the chart generic and inference-only
 
 ---
  README.md                                 |   4 +-
@@ -1111,5 +1111,501 @@ index 4d62685..2eb124f 100644
 +replicaCount: 1
 +
  engine: vllm
+-# Published sm90 EXL3 candidate; not yet GPU/full-model qualified.
++
++port: 8080
++
++# Engine image, CLI arguments and environment. Other engines need their own compatible block.
+ vllm:
+   image: ghcr.io/enthus-appdev/vllm-pcai@sha256:a989e911ba26f2120196f4ba4a3b92701b202dee5e853776c58096305ecb3388
+   args:
+-  - /models/revisions/aee640e2afba93be683bb5b9b420115fe7fbac20
+-  - --served-model-name
+-  - DeepSeek-V4-Flash
+-  - DeepSeek-V4.1-Flash
+-  - --distributed-executor-backend
+-  - mp
+-  - --tensor-parallel-size
+-  - '2'
+-  - --trust-remote-code
+-  - --tokenizer-mode
+-  - deepseek_v41
+-  - --reasoning-parser
+-  - deepseek_v41
+-  - --tool-call-parser
+-  - deepseek_v41
+-  - --enable-auto-tool-choice
+-  - --default-chat-template-kwargs={"thinking":true,"reasoning_effort":"high"}
+-  - --kv-cache-dtype
+-  - fp8
+-  - --max-model-len
+-  - '8192'
+-  - --no-async-scheduling
+-  - --gpu-memory-utilization
+-  - '0.85'
+-  - --max-num-seqs
+-  - '1'
+-  - --max-num-batched-tokens
+-  - '512'
+-  - --engram-config={"cpu_offload":false,"dp_shared_memory":false,"use_thp":false}
+-  - --offload-backend
+-  - uva
+-  - --cpu-offload-gb
+-  - '112'
+-  - --cpu-offload-params
+-  - w13_trellis
+-  - w13_suh
+-  - w13_svh
+-  - w2_trellis
+-  - w2_suh
+-  - w2_svh
+-  - --port
+-  - '8080'
+-  - --enforce-eager
+-  - --language-model-only
+-  - --safetensors-load-strategy
+-  - lazy
+-  - --model-loader-extra-config={"enable_multithread_load":false}
+-  - --quantization
+-  - exl3
+-  - --kv-cache-memory-bytes
+-  - '4294967296'
++    - /models/revisions/aee640e2afba93be683bb5b9b420115fe7fbac20
++    - --served-model-name
++    - DeepSeek-V4-Flash
++    - DeepSeek-V4.1-Flash
++    - --distributed-executor-backend
++    - mp
++    - --tensor-parallel-size
++    - '2'
++    - --trust-remote-code
++    - --tokenizer-mode
++    - deepseek_v41
++    - --reasoning-parser
++    - deepseek_v41
++    - --tool-call-parser
++    - deepseek_v41
++    - --enable-auto-tool-choice
++    - --default-chat-template-kwargs={"thinking":true,"reasoning_effort":"high"}
++    - --kv-cache-dtype
++    - fp8
++    - --max-model-len
++    - '8192'
++    - --no-async-scheduling
++    - --gpu-memory-utilization
++    - '0.85'
++    - --max-num-seqs
++    - '1'
++    - --max-num-batched-tokens
++    - '512'
++    - --engram-config={"cpu_offload":false,"dp_shared_memory":false,"use_thp":false}
++    - --offload-backend
++    - uva
++    - --cpu-offload-gb
++    - '112'
++    - --cpu-offload-params
++    - w13_trellis
++    - w13_suh
++    - w13_svh
++    - w2_trellis
++    - w2_suh
++    - w2_svh
++    - --port
++    - '8080'
++    - --enforce-eager
++    - --language-model-only
++    - --safetensors-load-strategy
++    - lazy
++    - --model-loader-extra-config={"enable_multithread_load":false}
++    - --quantization
++    - exl3
++    - --kv-cache-memory-bytes
++    - '4294967296'
+   env:
+-  - name: VLLM_USE_V2_MODEL_RUNNER
+-    value: '1'
+-  - name: VLLM_SPARSE_INDEXER_MAX_LOGITS_MB
+-    value: '128'
+-  - name: VLLM_ENGINE_READY_TIMEOUT_S
+-    value: '3600'
+-  - name: VLLM_LOGGING_LEVEL
+-    value: INFO
+-  - name: PCAI_ENGRAM_DIR
+-    value: /local-model
+-  - name: VLLM_EXL3_REQUIRE_UVA_EXPERTS
+-    value: '1'
+-  - name: VLLM_EXL3_MEM_PROBE
+-    value: '1'
+-# Other engines require an explicit image, args, env and compatible model PVC.
+-port: 8080
+-# Independently verified EAQ body, mounted read-only.
++    - name: VLLM_USE_V2_MODEL_RUNNER
++      value: '1'
++    - name: VLLM_SPARSE_INDEXER_MAX_LOGITS_MB
++      value: '128'
++    - name: VLLM_ENGINE_READY_TIMEOUT_S
++      value: '3600'
++    - name: VLLM_LOGGING_LEVEL
++      value: INFO
++    - name: PCAI_ENGRAM_DIR
++      value: /local-model
++    - name: VLLM_EXL3_REQUIRE_UVA_EXPERTS
++      value: '1'
++
++# Primary model PVC, mounted read-only. Verify its preparation receipt before startup.
+ model:
+   existingClaim: model-deepseek-v41-eaq-v11
+   mountPath: /models
+@@ -88,21 +88,37 @@ model:
+     files: 47
+     bytes: 210800717506
+     markerId: b4f947d1-740f-4017-abfb-7136c119b664
+-apiKey:
+-  existingSecret: vllm-deepseek-api
+-  secretKey: api-key
++
++# Optional selected-file staging from another read-only PVC to disk-backed /local-model.
++localModel:
++  enabled: true
++  existingClaim: model-deepseek-v41-flash-1017
++  sourceVerify:
++    enabled: true
++    revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
++    manifestSha256: 3d15864cba81a2c4520e992e6c787b3ff6e8e4ba9cc26e847f0f43bc77388b1c
++    files: 83
++    bytes: 510311045295
++    markerId: 7db24a33-650a-405b-83e3-2104e0e3093d
++  files:
++    - path: model-00047-of-00048.safetensors
++      size: 101535150936
++      sha256: 76a05106ece259be83d1bfea0dcb54f23377864ee60fd321690f35e6698a2af5
++    - path: model-00048-of-00048.safetensors
++      size: 101537926640
++      sha256: 9dc51433e195bc78b5ad846b68643cc0351d3b174e5e4309222d3b7402c83afd
++    - path: model.safetensors.index.json
++      size: 7470294
++      sha256: 74b0686a3d2891980d5e303251b075a3bccae2c2ff650747db2620a649b98fa8
++  sizeLimit: 230Gi
++  freeHeadroom: 32Gi
++
++# PCAI GPU admission. Multiple GPUs require whole-device allocation.
+ gpu:
+   count: 2
+   migSizes: whole
+-# SHM is memory-backed; the separate Engram table volume is NOT.
+-shm:
+-  sizeLimit: 16Gi
+-cache:
+-  enabled: true
+-  existingClaim: ''
+-  size: 50Gi
+-  storageClass: nfs-csi
+-  accessMode: ReadWriteOnce
++
++# Inference container requests and limits. Include disk staging in ephemeral storage.
+ resources:
+   requests:
+     cpu: '8'
+@@ -112,17 +128,25 @@ resources:
+     cpu: '32'
+     memory: 320Gi
+     ephemeral-storage: 260Gi
+-startupTimeoutSeconds: 3600
+-component: inference
+-checkImage: ghcr.io/enthus-appdev/pcai-inference-probe@sha256:32699bbda49ca935b558650732ba3b9edf105ed2197e530b224aa5dacf8d9cae
+-podSecurityContext:
+-  runAsNonRoot: true
+-  runAsUser: 10000004
+-  runAsGroup: 1001
+-  fsGroup: 1001
+-  fsGroupChangePolicy: OnRootMismatch
+-  seccompProfile:
+-    type: RuntimeDefault
++
++# Memory-backed /dev/shm, separate from the disk-backed local model volume.
++shm:
++  sizeLimit: 16Gi
++
++# Persistent compile/kernel cache. Existing claims are never deleted by this chart.
++cache:
++  enabled: true
++  existingClaim: ''
++  size: 50Gi
++  storageClass: nfs-csi
++  accessMode: ReadWriteOnce
++
++# Reference an existing API-key Secret; never place the credential in values.
++apiKey:
++  existingSecret: vllm-deepseek-api
++  secretKey: api-key
++
++# Optional userspace WireGuard-over-HTTPS access using existing Secrets.
+ wireguard:
+   enabled: true
+   existingSecret: vllm-deepseek-wireguard
+@@ -134,27 +158,19 @@ wireguard:
+     endpoint: wss://bifrost.fankserver.com
+     pathPrefix: pcai-wireguard
+     image: ghcr.io/enthus-appdev/pcai-inference-probe@sha256:67a75f3507ce6c0bded9c1d993026c52f8e7eaa10a193a19bbe9d0f245fb5e48
+-# Original Engram tables: stage only these hash-pinned files to disk emptyDir.
+-# Source receipt, current free space, input hashes and destination hashes are checked.
+-localModel:
+-  enabled: true
+-  existingClaim: model-deepseek-v41-flash-1017
+-  sourceVerify:
+-    enabled: true
+-    revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
+-    manifestSha256: 3d15864cba81a2c4520e992e6c787b3ff6e8e4ba9cc26e847f0f43bc77388b1c
+-    files: 83
+-    bytes: 510311045295
+-    markerId: 7db24a33-650a-405b-83e3-2104e0e3093d
+-  files:
+-  - path: model-00047-of-00048.safetensors
+-    size: 101535150936
+-    sha256: 76a05106ece259be83d1bfea0dcb54f23377864ee60fd321690f35e6698a2af5
+-  - path: model-00048-of-00048.safetensors
+-    size: 101537926640
+-    sha256: 9dc51433e195bc78b5ad846b68643cc0351d3b174e5e4309222d3b7402c83afd
+-  - path: model.safetensors.index.json
+-    size: 7470294
+-    sha256: 74b0686a3d2891980d5e303251b075a3bccae2c2ff650747db2620a649b98fa8
+-  sizeLimit: 230Gi
+-  freeHeadroom: 32Gi
++
++startupTimeoutSeconds: 3600
++
++component: inference
++
++# Python image for model verification and selected-file staging.
++checkImage: ghcr.io/enthus-appdev/pcai-inference-probe@sha256:32699bbda49ca935b558650732ba3b9edf105ed2197e530b224aa5dacf8d9cae
++
++podSecurityContext:
++  runAsNonRoot: true
++  runAsUser: 10000004
++  runAsGroup: 1001
++  fsGroup: 1001
++  fsGroupChangePolicy: OnRootMismatch
++  seccompProfile:
++    type: RuntimeDefault
+diff --git a/checks/test_chart.py b/checks/test_chart.py
+index 08c029a..75d940e 100644
+--- a/checks/test_chart.py
++++ b/checks/test_chart.py
+@@ -74,7 +74,7 @@ class Defaults(unittest.TestCase):
+     def test_recreate_and_single_replica(self):
+         d = deployment(render())
+         self.assertEqual(d["spec"]["strategy"], {"type": "Recreate"})
+-        self.assertEqual(d["spec"]["replicas"], 0)
++        self.assertEqual(d["spec"]["replicas"], 1)
 
-[Showing lines 1-1113 of 1424 (50.0KB limit). Use offset=1114 to continue.]
+     def test_model_readonly_and_shm(self):
+         spec = deployment(render())["spec"]["template"]["spec"]
+@@ -175,6 +175,20 @@ class Engines(unittest.TestCase):
+             self.assertEqual(svc["metadata"]["name"], "deepseek-v4-flash")
+             self.assertEqual(deployment(docs)["metadata"]["name"], "deepseek-v4-flash")
+
++    def test_generic_vllm_profile_needs_no_eaq_features(self):
++        docs = render({
++            "vllm": {"args": ["/models/another-model", "--port", "8080"], "env": []},
++            "model": {"existingClaim": "another-model", "verify": {"enabled": False}},
++            "localModel": {"enabled": False},
++        })
++        spec = deployment(docs)["spec"]["template"]["spec"]
++        self.assertEqual(deployment(docs)["spec"]["replicas"], 1)
++        self.assertEqual(spec["containers"][0]["args"], ["/models/another-model", "--port", "8080"])
++        self.assertNotIn("PCAI_ENGRAM_DIR", env(spec["containers"][0]))
++        self.assertNotIn("VLLM_EXL3_REQUIRE_UVA_EXPERTS", env(spec["containers"][0]))
++        self.assertEqual([c["name"] for c in spec["initContainers"]], ["storage-check"])
++        self.assertNotIn("Job", [d["kind"] for d in docs])
++
+     def test_values_env_overrides_default_without_duplicates(self):
+         c = engine_container(render({"vllm": {"env": [{"name": "VLLM_LOGGING_LEVEL", "value": "DEBUG"}, {"name": "HF_HUB_OFFLINE", "value": "0"}]}}))
+         names = [x["name"] for x in c["env"]]
+
+From 926a00a4fea6fe5c183d585d1227c09b32a6044e Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 15:52:33 +0100
+Subject: [PATCH 5/5] feat: route inference through the PCAI platform gateway
+
+---
+ README.md                                     |  3 +-
+ charts/pcai-inference/templates/NOTES.txt     |  6 +++-
+ .../templates/virtualservice.yaml             | 30 +++++++++++++++++++
+ charts/pcai-inference/values.schema.json      | 21 ++++++++++++-
+ charts/pcai-inference/values.yaml             |  9 ++++++
+ checks/test_chart.py                          | 24 ++++++++++++++-
+ 6 files changed, 89 insertions(+), 4 deletions(-)
+ create mode 100644 charts/pcai-inference/templates/virtualservice.yaml
+
+diff --git a/README.md b/README.md
+index ee84bc9..746c59d 100644
+--- a/README.md
++++ b/README.md
+@@ -5,7 +5,7 @@ Helm chart for running an LLM server as an **HPE PCAI custom framework**. One ch
+ - **Weights:** an existing PVC, mounted read-only. Nothing is downloaded at startup.
+ - **`/dev/shm`:** a large memory-backed volume, which NCCL and the engines need.
+ - **Compile cache:** a persistent volume, so restarts reuse compiled kernels.
+-- **Access:** an optional private WireGuard tunnel carried over authenticated WebSocket/TLS.
++- **Access:** a PCAI VirtualService on the shared platform gateway, plus an optional private WireGuard tunnel carried over authenticated WebSocket/TLS.
+ - **Security:** API-key authentication from an existing Secret; everything runs non-root without added capabilities.
+
+ This chart deploys **only the real inference workload**: a Deployment, Service, storage checks, optional local model staging, and compile-cache PVC. It contains no qualification mode or test Jobs. Defaults select the current DeepSeek V4.1 EAQ profile, including its image, verified model PVCs, disk-backed Engram staging and resources. **Installing the chart starts one inference replica.** Engine/model qualification is performed separately, not by this chart.
+@@ -47,6 +47,7 @@ Each block has its own `image`, `args` and `env`. The release name, Service, API
+ | `resources` | CPU, memory and ephemeral storage. GPUs come from `gpu.count`; the schema rejects GPU entries here. |
+ | `localModel` | Selected hash-pinned files from a read-only source PVC, staged to disk-backed `/local-model`. Requires ephemeral-storage request/limit and current free-space headroom. |
+ | `startupTimeoutSeconds` | Time allowed until `/health` responds (weights, compile, graph capture). |
++| `ezua.virtualService` | PCAI ingress: a VirtualService for `endpoint` on `istioGateway`, routed to the Service with no retries and a long `timeout`. PCAI substitutes `${DOMAIN_NAME}`. The engine API key still applies. |
+ | `wireguard` | Userspace WireGuard sidecar (no TUN device, no privileges) plus a wstunnel client to the TLS edge. Needs a peer config Secret and an HTTPS auth-header Secret. |
+
+ An init container checks the model completion record, the read-only mount, the actual `/dev/shm` size and a writable cache directory before the engine starts. It fails fast instead of after a long load.
+diff --git a/charts/pcai-inference/templates/NOTES.txt b/charts/pcai-inference/templates/NOTES.txt
+index a937791..0e5dd4d 100644
+--- a/charts/pcai-inference/templates/NOTES.txt
++++ b/charts/pcai-inference/templates/NOTES.txt
+@@ -4,4 +4,8 @@ Model PVC: {{ .Values.model.existingClaim }}
+ {{- if .Values.localModel.enabled }}
+ Selected files are staged from {{ .Values.localModel.existingClaim }} to disk before startup.
+ {{- end }}
+-The Service exposes port {{ .Values.port }}. Readiness requires a healthy inference server.
++{{- if .Values.ezua.virtualService.enabled }}
++PCAI endpoint: https://{{ .Values.ezua.virtualService.endpoint }}
++{{- end }}
++In-cluster: http://{{ .Release.Name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.port }}
++Requests require the API key from Secret {{ .Values.apiKey.existingSecret }}.
+diff --git a/charts/pcai-inference/templates/virtualservice.yaml b/charts/pcai-inference/templates/virtualservice.yaml
+new file mode 100644
+index 0000000..b08024e
+--- /dev/null
++++ b/charts/pcai-inference/templates/virtualservice.yaml
+@@ -0,0 +1,30 @@
++{{- if .Values.ezua.virtualService.enabled }}
++# PCAI imported-application route through the shared platform gateway.
++apiVersion: networking.istio.io/v1alpha3
++kind: VirtualService
++metadata:
++  name: {{ .Release.Name }}
++  labels:
++    {{- include "inference.selectorLabels" . | nindent 4 }}
++spec:
++  hosts:
++    - {{ required "ezua.virtualService.endpoint is required" .Values.ezua.virtualService.endpoint | quote }}
++  gateways:
++    - {{ .Values.ezua.virtualService.istioGateway | quote }}
++  http:
++    - match:
++        - uri:
++            prefix: /
++      rewrite:
++        uri: /
++      # Long generations and cold long-context prefill exceed default route timeouts.
++      timeout: {{ .Values.ezua.virtualService.timeout | quote }}
++      # Inference requests are not idempotent; never replay them at the gateway.
++      retries:
++        attempts: 0
++      route:
++        - destination:
++            host: {{ printf "%s.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
++            port:
++              number: {{ .Values.port }}
++{{- end }}
+diff --git a/charts/pcai-inference/values.schema.json b/charts/pcai-inference/values.schema.json
+index 1e17441..ab7d32f 100644
+--- a/charts/pcai-inference/values.schema.json
++++ b/charts/pcai-inference/values.schema.json
+@@ -1,7 +1,7 @@
+ {
+   "$schema": "https://json-schema.org/draft-07/schema#",
+   "type": "object",
+-  "required": ["replicaCount", "engine", "port", "model", "apiKey", "gpu", "shm", "cache", "resources", "startupTimeoutSeconds", "component", "checkImage", "wireguard"],
++  "required": ["replicaCount", "engine", "port", "model", "apiKey", "gpu", "shm", "cache", "resources", "startupTimeoutSeconds", "component", "checkImage", "wireguard", "ezua"],
+   "definitions": {
+     "digestImage": {"type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$"},
+     "engine": {
+@@ -128,6 +128,25 @@
+     "startupTimeoutSeconds": {"type": "integer", "minimum": 60, "maximum": 14400},
+     "component": {"$ref": "#/definitions/name"},
+     "checkImage": {"$ref": "#/definitions/digestImage"},
++    "ezua": {
++      "type": "object",
++      "required": ["virtualService"],
++      "properties": {
++        "virtualService": {
++          "type": "object",
++          "required": ["enabled"],
++          "additionalProperties": false,
++          "properties": {
++            "enabled": {"type": "boolean"},
++            "endpoint": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.([a-z0-9]([-a-z0-9]*[a-z0-9])?|\\$\\{DOMAIN_NAME\\}))+$"},
++            "istioGateway": {"type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$"},
++            "timeout": {"type": "string", "pattern": "^[1-9][0-9]*s$"}
++          },
++          "if": {"properties": {"enabled": {"const": true}}},
++          "then": {"required": ["endpoint", "istioGateway", "timeout"]}
++        }
++      }
++    },
+     "wireguard": {
+       "type": "object",
+       "required": ["enabled"],
+diff --git a/charts/pcai-inference/values.yaml b/charts/pcai-inference/values.yaml
+index 2eb124f..2f71772 100644
+--- a/charts/pcai-inference/values.yaml
++++ b/charts/pcai-inference/values.yaml
+@@ -146,6 +146,15 @@ apiKey:
+   existingSecret: vllm-deepseek-api
+   secretKey: api-key
+
++# PCAI ingress: a VirtualService on the shared platform gateway. PCAI substitutes
++# ${DOMAIN_NAME}. The engine's API key still applies to every request.
++ezua:
++  virtualService:
++    enabled: true
++    endpoint: deepseek.${DOMAIN_NAME}
++    istioGateway: istio-system/ezaf-gateway
++    timeout: 1800s
++
+ # Optional userspace WireGuard-over-HTTPS access using existing Secrets.
+ wireguard:
+   enabled: true
+diff --git a/checks/test_chart.py b/checks/test_chart.py
+index 75d940e..5415f7e 100644
+--- a/checks/test_chart.py
++++ b/checks/test_chart.py
+@@ -57,7 +57,7 @@ def env(container):
+ class Defaults(unittest.TestCase):
+     def test_kinds_and_no_secrets_created(self):
+         kinds = sorted(d["kind"] for d in render())
+-        self.assertEqual(kinds, ["ConfigMap", "Deployment", "PersistentVolumeClaim", "Service"])
++        self.assertEqual(kinds, ["ConfigMap", "Deployment", "PersistentVolumeClaim", "Service", "VirtualService"])
+
+     def test_gpu_admission_identity(self):
+         d = deployment(render())
+@@ -113,6 +113,28 @@ class Defaults(unittest.TestCase):
+             self.assertEqual(c["securityContext"]["capabilities"], {"drop": ["ALL"]}, c["name"])
+
+
++class Ingress(unittest.TestCase):
++    def test_pcai_virtual_service_routes_to_inference_service(self):
++        vs = next(d for d in render() if d["kind"] == "VirtualService")
++        spec = vs["spec"]
++        self.assertEqual(vs["metadata"]["name"], "deepseek-v4-flash")
++        self.assertEqual(spec["hosts"], ["deepseek.${DOMAIN_NAME}"])
++        self.assertEqual(spec["gateways"], ["istio-system/ezaf-gateway"])
++        route = spec["http"][0]
++        self.assertEqual(route["match"], [{"uri": {"prefix": "/"}}])
++        self.assertEqual(route["timeout"], "1800s")
++        self.assertEqual(route["retries"], {"attempts": 0})
++        self.assertEqual(route["route"][0]["destination"], {
++            "host": f"deepseek-v4-flash.{NS}.svc.cluster.local", "port": {"number": 8080}})
++
++    def test_virtual_service_optional_and_validated(self):
++        kinds = [d["kind"] for d in render({"ezua": {"virtualService": {"enabled": False}}})]
++        self.assertNotIn("VirtualService", kinds)
++        for vs in [{"endpoint": "Bad Host"}, {"timeout": "0s"}, {"istioGateway": "ezaf-gateway"}]:
++            with self.subTest(vs=vs):
++                render({"ezua": {"virtualService": vs}}, success=False)
++
++
+ class Engines(unittest.TestCase):
+     def test_vllm_key_from_env_and_caches_on_pvc(self):
+         c = engine_container(render())
