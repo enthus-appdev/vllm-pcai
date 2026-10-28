@@ -41,6 +41,18 @@ The fixture graph mocks vLLM and tests both TP head partitions, inactive/padded
 heads, capacity errors and fail-closed graph settings. They do not execute
 multi-GPU collectives or the full model.
 
+## Next test phase
+
+`gpu_qualification.py` is a bounded synthetic two-H100/TP2 smoke, not a model
+load or serving endpoint. Run it only in an explicitly approved one-shot Job
+with a small disk `/fixtures` volume, a timeout and no retries. It compares K2/K3
+native GEMV with a dequantized reference and disk Engram with the stock CUDA
+lookup, including real vLLM TP gathering. A pass does not qualify full-model
+loading, cooperative expert kernels, UVA placement, quality or performance.
+
+The companion `chart-support.patch` preserves the generic selected-file staging
+changes; source and destination files are hash-checked before serving begins.
+
 ## Release gates
 
 1. Native sm_90 extensions compile and import without replacing the base torch.

@@ -1,7 +1,7 @@
 From 001f6df2192768582777d4cbd4908d48dc124761 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:12:34 +0100
-Subject: [PATCH] feat: add hash-verified local model staging
+Subject: [PATCH 1/2] feat: add hash-verified local model staging
 
 ---
  LOCAL-MODEL-STAGING.md                        |  36 ++++++
@@ -473,6 +473,24 @@ index 0000000..c5b6e72
 +
 +if __name__ == '__main__':
 +    unittest.main()
--- 
-2.43.0
 
+From cedd8f23712c010ab4d28c93b9e724ed2d7fb5ec Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 13:41:59 +0100
+Subject: [PATCH 2/2] build: exclude Python cache files from chart archives
+
+---
+ charts/pcai-inference/.helmignore | 4 ++++
+ 1 file changed, 4 insertions(+)
+ create mode 100644 charts/pcai-inference/.helmignore
+
+diff --git a/charts/pcai-inference/.helmignore b/charts/pcai-inference/.helmignore
+new file mode 100644
+index 0000000..2c44691
+--- /dev/null
++++ b/charts/pcai-inference/.helmignore
+@@ -0,0 +1,4 @@
++__pycache__
++*.pyc
++*.pyo
++.git
