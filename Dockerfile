@@ -349,3 +349,17 @@ RUN set -eux; \
     cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
     python3 /tmp/verify_embed_offload_plugin.py "$VLLM_DIR"; \
     rm -rf /tmp/pcai_embed_offload /tmp/verify_embed_offload_plugin.py
+
+# Stability bundle on v0.32.0: #63427 (6ee3f40), #54163 (3088df4),
+# #60553 (5a675fa), #59030 (54e0b57). Only #54163 config context is adapted.
+# Preserve broad EAGLE lookahead and the existing model_weights inheritance.
+COPY patches/vision-stability-v032.patch /tmp/stability.patch
+COPY diag/verify_stability_patch.py /tmp/verify_stability_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/stability.patch | cut -d' ' -f1)" = "185ef3b32eab7aefab857e81de107b5714ed94525df654712e1616753f2b7668"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/stability.patch; \
+    else patch -p1 -d "$SITE" < /tmp/stability.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_stability_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/stability.patch /tmp/verify_stability_patch.py

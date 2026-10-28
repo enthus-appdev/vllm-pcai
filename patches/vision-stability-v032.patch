@@ -1,0 +1,135 @@
+diff --git a/vllm/config/speculative.py b/vllm/config/speculative.py
+index ec30bcb..8e3520b 100644
+--- a/vllm/config/speculative.py
++++ b/vllm/config/speculative.py
+@@ -1966,9 +1966,18 @@ class SpeculativeConfig:
+         # TODO(ben): Refactor this so the naming is clearer
+         return self.method in ("eagle", "eagle3", "mtp", "dflash", "dspark")
+ 
++    def needs_eagle_block_drop(self) -> bool:
++        """Whether draft KV at a position depends on the next token.
++
++        EAGLE-style drafters build a position's draft KV from its hidden state
++        and the next token. DFlash/DSpark build it from the target hidden state
++        alone, so only EAGLE/EAGLE3/MTP require the trailing-block drop.
++        """
++        return self.use_eagle() and not (self.use_dflash() or self.use_dspark())
++
+     def use_eagle_block_drop(self) -> bool:
+-        """Whether volatile trailing cache blocks should be discarded."""
+-        return self.use_eagle() and not self.disable_eagle_block_drop
++        """Whether the volatile trailing prefix-cache block should be dropped."""
++        return self.needs_eagle_block_drop() and not self.disable_eagle_block_drop
+ 
+     def use_dflash(self) -> bool:
+         return self.method == "dflash"
+diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
+index 4bf2e33..413b4db 100644
+--- a/vllm/utils/torch_utils.py
++++ b/vllm/utils/torch_utils.py
+@@ -897,14 +897,17 @@ def weak_ref_tensors(
+     | IntermediateTensors,
+ ) -> torch.Tensor | list[Any] | tuple[Any] | Any:
+     """Convenience function to create weak references to tensors,
+-    for single tensor, list of tensors or tuple of tensors.
++    for single tensor, possibly nested list/tuple of tensors, or
++    IntermediateTensors. Ints and LayerNames are returned as is.
+     """
+     if isinstance(tensors, torch.Tensor):
+         return weak_ref_tensor(tensors)
+     if isinstance(tensors, list):
+-        return [weak_ref_tensor(t) for t in tensors]
++        return [weak_ref_tensors(t) for t in tensors]
+     if isinstance(tensors, tuple):
+-        return tuple(weak_ref_tensor(t) for t in tensors)
++        return tuple(weak_ref_tensors(t) for t in tensors)
++    if isinstance(tensors, (int, LayerName)):
++        return tensors
+ 
+     # For IntermediateTensors used in pipeline parallelism
+     from vllm.sequence import IntermediateTensors
+@@ -914,7 +917,7 @@ def weak_ref_tensors(
+             {key: weak_ref_tensor(val) for key, val in tensors.tensors.items()}
+         )
+         return ret
+-    raise ValueError("Invalid type for tensors")
++    raise ValueError(f"Invalid type for tensors: {type(tensors)}")
+ 
+ 
+ def get_accelerator_view_from_cpu_tensor(cpu_tensor: torch.Tensor) -> torch.Tensor:
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index cec96d2..38ab94f 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -314,7 +314,10 @@ class Scheduler(SchedulerInterface):
+                 )
+             self.use_eagle = speculative_config.use_eagle()
+             self.use_eagle_block_drop = speculative_config.use_eagle_block_drop()
+-            if self.use_eagle and not self.use_eagle_block_drop:
++            if (
++                speculative_config.needs_eagle_block_drop()
++                and speculative_config.disable_eagle_block_drop
++            ):
+                 logger.warning(
+                     "EAGLE trailing prefix-cache block dropping is disabled. "
+                     "This is experimental and may affect speculative-token "
+@@ -1215,8 +1218,10 @@ class Scheduler(SchedulerInterface):
+                     )
+ 
+                     if num_new_tokens == 0:
+-                        # The request cannot be scheduled.
+-                        break
++                        # The request cannot be scheduled. Requeue it so it does
++                        # not stall the requests behind it.
++                        skip_request(request_queue)
++                        continue
+ 
+                 # During async KV load, no forward pass is run yet.
+                 # Allocate speculative lookahead slots later to avoid
+@@ -1926,11 +1931,12 @@ class Scheduler(SchedulerInterface):
+                 # NOTE(woosuk): We assume that the encoder input tokens should
+                 # be processed altogether, as the encoder usually uses
+                 # bidirectional attention.
+-                if num_computed_tokens + shift_computed_tokens < start_pos:
++                if num_computed_tokens < start_pos:
+                     # We only schedule the decoder tokens just before the
+-                    # encoder input.
+-                    num_new_tokens = start_pos - (
+-                        num_computed_tokens + shift_computed_tokens
++                    # encoder input. No drafter shift here: its read-ahead into
++                    # this unencoded input falls back to token embeddings.
++                    num_new_tokens = min(
++                        num_new_tokens, start_pos - num_computed_tokens
+                     )
+                 else:
+                     # Because of prefix caching, num_computed_tokens is greater
+@@ -2517,11 +2523,6 @@ class Scheduler(SchedulerInterface):
+         if not cached_encoder_input_ids:
+             return
+ 
+-        # Defer the free by the drafter's look-ahead so an entry stays
+-        # referenced until the drafter's read-ahead has also passed it,
+-        # mirroring the shift the encoder scheduling path applies.
+-        spec_lookahead = self.num_prefill_lookahead
+-
+         # Here, we use list(set) to avoid modifying the set while iterating
+         # over it.
+         for input_id in list(cached_encoder_input_ids):
+@@ -2534,12 +2535,13 @@ class Scheduler(SchedulerInterface):
+                 # KVs have been calculated and cached already.
+                 self._free_encoder_input(request, input_id)
+             elif (
+-                start_pos + num_tokens + spec_lookahead
++                start_pos + num_tokens
+                 <= request.num_computed_tokens - request.num_output_placeholders
+             ):
+-                # Processed, stored in the decoder KV cache, and far enough past
+-                # the placeholder range (plus the drafter's look-ahead) that no
+-                # rejection or drafter gather can reference it.
++                # Processed, stored in the decoder KV cache, and past the
++                # placeholder range with no pending rejection that could roll
++                # back into it. The drafter only reads ahead of
++                # num_computed_tokens, so it cannot reference this input either.
+                 self._free_encoder_input(request, input_id)
+ 
+     def _free_encoder_input(self, request: Request, input_id: int) -> None:
