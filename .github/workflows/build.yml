@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      experimental_eaq:
+        description: Build the separate experimental H100 EAQ image (never production tags)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,8 +50,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - dockerfile: Dockerfile               # production image (no suffix)
-            flavor: ""
+          - dockerfile: ${{ inputs.experimental_eaq && 'experimental/eaq/Dockerfile' || 'Dockerfile' }}
+            flavor: ${{ inputs.experimental_eaq && '-eaq-v11' || '' }}
     steps:
       - name: Free disk space
         run: |
