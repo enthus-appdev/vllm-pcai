@@ -4,7 +4,7 @@ Custom [vLLM](https://github.com/vllm-project/vllm) images for **HPE Private Clo
 
 ## Why this image exists
 
-This image adds four layers on top of the stock `vllm/vllm-openai` base. They are baked in because MLIS cannot mount volumes (see [Deployment via MLIS](#deployment-via-mlis)):
+This image adds four layers on top of the stock `vllm/vllm-openai` base. They are baked in because MLIS cannot mount volumes (see [Deployment via MLIS](#deployment-via-mlis)). Custom-framework charts can mount PVCs; that is a separate deployment path:
 
 1. **Enhanced chat templates** — Qwen3.5/3.6 hardened templates (hidden historical reasoning, XML tool-call formatting, proper ` response` handling) from [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image. (Gemma 4 uses vLLM's **in-image** template at `/vllm-workspace/examples/tool_chat_template_gemma4.jinja`.)
 
@@ -69,11 +69,11 @@ Deployments that mount a larger memory-backed `/dev/shm` volume need no override
 | `/templates/qwen3.5-enhanced.jinja` | this image (allanchan339 fix) |
 | `/vllm-workspace/examples/*.jinja` | stock vLLM templates (incl. Gemma 4) |
 
-## Model-specific deployment configs
+## Documentation scope
 
-Operational knowledge — validated serve args, performance figures, and issue history — is documented in a separate internal repo.
+This public repository documents the image: build instructions, templates, patches, diagnostics and tests. Deployment-specific configurations, operational measurements and research are maintained privately and are not published here.
 
-The [2026-10-23 upstream PR research report](research_open-vllm-prs-for-pcai_20261023.md) records source applicability, patch checks and memory estimates. It is a dated research snapshot, not a deployment configuration or GPU qualification; the vendored-patch list above describes the current image.
+The vendored-patch list above describes the current image. [C128 state accounting](docs/c128-state-accounting.md) explains the bundled patch's source-level memory geometry; it is not a deployment configuration or GPU qualification.
 
 ## Clone
 
