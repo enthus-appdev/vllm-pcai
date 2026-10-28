@@ -1,7 +1,7 @@
 From 001f6df2192768582777d4cbd4908d48dc124761 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:12:34 +0100
-Subject: [PATCH 1/2] feat: add hash-verified local model staging
+Subject: [PATCH 1/3] feat: add hash-verified local model staging
 
 ---
  LOCAL-MODEL-STAGING.md                        |  36 ++++++
@@ -332,7 +332,7 @@ index d2574b5..39807fd 100644
 @@ -104,6 +104,16 @@ model:
      bytes: 166898661074
      markerId: b9686c13-35ff-4c66-8e63-c10ab2bf0c87
- 
+
 +# Optional selected-file staging to disk-backed emptyDir at /local-model.
 +# Files must carry SHA256 + exact size, and the source PVC needs a pinned receipt.
 +localModel:
@@ -477,7 +477,7 @@ index 0000000..c5b6e72
 From cedd8f23712c010ab4d28c93b9e724ed2d7fb5ec Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:41:59 +0100
-Subject: [PATCH 2/2] build: exclude Python cache files from chart archives
+Subject: [PATCH 2/3] build: exclude Python cache files from chart archives
 
 ---
  charts/pcai-inference/.helmignore | 4 ++++
@@ -494,3 +494,534 @@ index 0000000..2c44691
 +*.pyc
 +*.pyo
 +.git
+
+From 1d8bae20be9ecfa8ca9df5e498f2aad17df119c3 Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 15:04:08 +0100
+Subject: [PATCH 3/3] fix: make exact EAQ preparation settings the chart
+ defaults
+
+---
+ LOCAL-MODEL-STAGING.md                    |   6 +-
+ README.md                                 |   9 +-
+ charts/pcai-inference/Chart.yaml          |   4 +-
+ charts/pcai-inference/templates/NOTES.txt |  11 ++
+ charts/pcai-inference/values.yaml         | 204 ++++++++++------------
+ checks/test_chart.py                      |  55 ++++--
+ checks/test_local_model.py                |  20 ++-
+ 7 files changed, 172 insertions(+), 137 deletions(-)
+ create mode 100644 charts/pcai-inference/templates/NOTES.txt
+
+diff --git a/LOCAL-MODEL-STAGING.md b/LOCAL-MODEL-STAGING.md
+index b84bc2c..3c5d55e 100644
+--- a/LOCAL-MODEL-STAGING.md
++++ b/LOCAL-MODEL-STAGING.md
+@@ -1,8 +1,8 @@
+ # Selected-file local staging
+
+-The candidate chart adds opt-in localModel staging without changing the default
+-model-serving configuration. It is intended for large immutable lookup tables,
+-not full-checkpoint prefetch.
++The chart provides selected-file localModel staging. The EAQ candidate defaults
++enable it for the original Engram tables; set localModel.enabled=false for a
++model without external lookup tables. It is not full-checkpoint prefetch.
+
+ When enabled, supply a source PVC, an exact preparation receipt, a revision,
+ and a filename/size/SHA256 manifest. An init container mounts that PVC read-only,
+diff --git a/README.md b/README.md
+index 90511cd..ca8e497 100644
+--- a/README.md
++++ b/README.md
+@@ -8,19 +8,19 @@ Helm chart for running an LLM server as an **HPE PCAI custom framework**. One ch
+ - **Access:** an optional private WireGuard tunnel carried over authenticated WebSocket/TLS.
+ - **Security:** API-key authentication from an existing Secret; everything runs non-root without added capabilities.
+
+-Defaults describe the DeepSeek V4 Flash deployment. Operational detail and measurements live in the private `pcai-llm-serving` repository.
++Defaults are the exact **DeepSeek V4.1 Flash 1017 EAQ v1.1 candidate**: published EXL3 image, verified EAQ model PVC, disk-backed original Engram staging, C1/8K/eager settings and bounded resources. No override file is required. **`replicaCount: 0` is intentional: importing the chart does not start inference.** GPU qualification is required before an attended model boot.
+
+ ## Install
+
+ 1. Prepare the model PVC, the API-key Secret and, for VPN access, a WireGuard peer Secret. The chart only references them and never creates them.
+-2. In PCAI, import the packaged chart as a custom framework. Use the model as the release name, for example `deepseek-v4-flash`. Pod admission keys on that name.
++2. In PCAI, import the packaged chart as a custom framework. The default configuration stages a zero-replica Deployment; no serving pod starts. Keep the selected release name for later updates; pod admission keys on that name.
+ 3. Make every later change by **editing the framework's values**, not by reinstalling: PCAI refuses a second install under a release name that is in use.
+
+ Only one pod runs at a time (`Recreate`), because GPUs and the WireGuard identity cannot be shared. A values change that touches the pod template restarts the server and reloads the model.
+
+ ## Switching engines
+
+-Both engine blocks stay in the values; `engine` picks the one that runs:
++`engine` picks the supplied engine block. The defaults supply only the EAQ-capable vLLM candidate; SGLang has no implicit compatible configuration for this pack. Switching engines requires an explicit matching image, args, env and compatible model PVC (and disabling or replacing EAQ local staging):
+
+ ```yaml
+ engine: sglang   # or vllm
+@@ -44,7 +44,8 @@ Each block has its own `image`, `args` and `env`. The release name, Service, API
+ | `gpu.count`, `gpu.migSizes` | GPU count, and the PCAI partition size annotation. More than one GPU requires `whole`; without it, PCAI rejects the pod even with free quota. |
+ | `shm.sizeLimit` | Memory-backed `/dev/shm`. It counts toward pod memory, so include it in `resources`. |
+ | `cache` | Persistent compile cache: creates `<release>-compile-cache`, kept on uninstall, or uses `existingClaim`. Disable to use pod scratch space. |
+-| `resources` | CPU and memory. GPUs come from `gpu.count`; the schema rejects GPU entries here. |
++| `resources` | CPU, memory and ephemeral storage. GPUs come from `gpu.count`; the schema rejects GPU entries here. |
++| `localModel` | Selected hash-pinned files from a read-only source PVC, staged to disk-backed `/local-model`. Requires ephemeral-storage request/limit and current free-space headroom. |
+ | `startupTimeoutSeconds` | Time allowed until `/health` responds (weights, compile, graph capture). |
+ | `wireguard` | Userspace WireGuard sidecar (no TUN device, no privileges) plus a wstunnel client to the TLS edge. Needs a peer config Secret and an HTTPS auth-header Secret. |
+
+diff --git a/charts/pcai-inference/Chart.yaml b/charts/pcai-inference/Chart.yaml
+index 6b512d6..db5de4d 100644
+--- a/charts/pcai-inference/Chart.yaml
++++ b/charts/pcai-inference/Chart.yaml
+@@ -1,6 +1,6 @@
+ apiVersion: v2
+ name: pcai-inference
+-description: Model server for PCAI custom frameworks - vLLM or SGLang, dedicated read-only model PVC, large /dev/shm, persistent compile cache, optional WireGuard-over-HTTPS access
++description: PCAI model server - exact DeepSeek V4.1 EAQ v1.1 candidate defaults, disk-backed Engram staging, zero replicas until GPU qualification
+ type: application
+-version: 0.2.0-rc.1
++version: 0.2.0-rc.2
+ home: https://github.com/enthus-appdev/pcai-inference
+diff --git a/charts/pcai-inference/templates/NOTES.txt b/charts/pcai-inference/templates/NOTES.txt
+new file mode 100644
+index 0000000..cdf94a1
+--- /dev/null
++++ b/charts/pcai-inference/templates/NOTES.txt
+@@ -0,0 +1,11 @@
++{{- if eq (int .Values.replicaCount) 0 }}
++PREPARATION ONLY: {{ .Release.Name }} has zero replicas. No inference pod is started.
++The chart defaults are the DeepSeek V4.1 EAQ v1.1 candidate, including its published
++image, verified model PVCs, disk-backed Engram staging and bounded resources.
++Complete the approved two-H100/TP2 synthetic test before an attended model boot.
++Changing replicaCount to 1 starts the full model; it does not run that synthetic test.
++{{- else }}
++{{ .Release.Name }} requests {{ .Values.replicaCount }} serving replica.
++Monitor startup and stop on the first initialization failure or node pressure.
++Do not raise the memory limit automatically to force the model to load.
++{{- end }}
+diff --git a/charts/pcai-inference/values.yaml b/charts/pcai-inference/values.yaml
+index 39807fd..4d62685 100644
+--- a/charts/pcai-inference/values.yaml
++++ b/charts/pcai-inference/values.yaml
+@@ -1,159 +1,120 @@
+-# Defaults describe the DeepSeek V4 Flash deployment, so a UI save without a values file
+-# still produces it. For another model, override model, engine blocks and resources.
+-replicaCount: 1
+-
+-# Which block below runs: vllm or sglang. Switching restarts the pod (Recreate).
++# DeepSeek V4.1 Flash 1017 EAQ v1.1 — exact candidate defaults.
++# No override values file is needed for this preparation configuration.
++# Zero replicas intentionally: installing the chart does NOT start inference.
++# The synthetic two-H100/TP2 test must pass before an attended model boot.
++# Do not raise the 320Gi memory limit to force initialization to succeed.
++replicaCount: 0
+ engine: vllm
+-
++# Published sm90 EXL3 candidate; not yet GPU/full-model qualified.
+ vllm:
+-  image: ghcr.io/enthus-appdev/vllm-pcai@sha256:6f08f8997bb9d64dcc522cc2ec7f3bbb373b6b33a0d74600c9754ee48d56eeaf
++  image: ghcr.io/enthus-appdev/vllm-pcai@sha256:a989e911ba26f2120196f4ba4a3b92701b202dee5e853776c58096305ecb3388
+   args:
+-  - /models/revisions/7872f01b1d1fe23eabc4c98b48bffcef5a386062
++  - /models/revisions/aee640e2afba93be683bb5b9b420115fe7fbac20
+   - --served-model-name
+   - DeepSeek-V4-Flash
++  - DeepSeek-V4.1-Flash
+   - --distributed-executor-backend
+   - mp
+   - --tensor-parallel-size
+   - '2'
+   - --trust-remote-code
+   - --tokenizer-mode
+-  - deepseek_v4
++  - deepseek_v41
+   - --reasoning-parser
+-  - deepseek_v4
++  - deepseek_v41
+   - --tool-call-parser
+-  - deepseek_v4
++  - deepseek_v41
+   - --enable-auto-tool-choice
+   - --default-chat-template-kwargs={"thinking":true,"reasoning_effort":"high"}
+   - --kv-cache-dtype
+   - fp8
+-  - --block-size
+-  - '256'
+   - --max-model-len
+-  - '262144'
++  - '8192'
++  - --no-async-scheduling
+   - --gpu-memory-utilization
+-  - '0.95'
++  - '0.85'
+   - --max-num-seqs
+-  - '6'
++  - '1'
+   - --max-num-batched-tokens
+-  - '1024'
+-  - --max-cudagraph-capture-size
+-  - '32'
+-  - --speculative-config={"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"greedy"}
+-  - --compilation-config={"cudagraph_mode":"FULL_AND_PIECEWISE"}
++  - '512'
++  - --engram-config={"cpu_offload":false,"dp_shared_memory":false,"use_thp":false}
++  - --offload-backend
++  - uva
++  - --cpu-offload-gb
++  - '112'
++  - --cpu-offload-params
++  - w13_trellis
++  - w13_suh
++  - w13_svh
++  - w2_trellis
++  - w2_suh
++  - w2_svh
+   - --port
+   - '8080'
+-  - --kv-transfer-config={"kv_connector":"SimpleCPUOffloadConnector","kv_role":"kv_both","kv_connector_extra_config":{"cpu_bytes_to_use":68719476736}}
++  - --enforce-eager
++  - --language-model-only
++  - --safetensors-load-strategy
++  - lazy
++  - --model-loader-extra-config={"enable_multithread_load":false}
++  - --quantization
++  - exl3
++  - --kv-cache-memory-bytes
++  - '4294967296'
+   env:
+-  - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+-  - {name: VLLM_LOGGING_LEVEL, value: INFO}
+-
+-sglang:
+-  image: ghcr.io/enthus-appdev/sglang-pcai@sha256:fabaf61c6f2a939ecb31680340d97561412bf74a66b3a9102dc1dcfdf4ad8793
+-  args:
+-  - --model-path
+-  - /models/revisions/7872f01b1d1fe23eabc4c98b48bffcef5a386062
+-  - --served-model-name
+-  - DeepSeek-V4-Flash
+-  - --host
+-  - 0.0.0.0
+-  - --port
+-  - '8080'
+-  - --tensor-parallel-size
+-  - '2'
+-  - --trust-remote-code
+-  # W4A16: the FP8-activation variant runs out of GPU memory while repacking experts.
+-  - --moe-runner-backend
+-  - flashinfer_mxfp4
+-  - --kv-cache-dtype
+-  - fp8_e4m3
+-  - --context-length
+-  - '262144'
+-  - --max-running-requests
+-  - '6'
+-  - --chunked-prefill-size
+-  - '1024'
+-  - --speculative-algorithm
+-  - DSPARK
+-  - --reasoning-parser
+-  - deepseek-v4
+-  - --tool-call-parser
+-  - deepseekv4
+-  - --default-chat-template-kwargs
+-  - '{"thinking":true,"reasoning_effort":"high"}'
+-  # DeepSeek V4 HiCache accepts only a ratio to the GPU KV pool, not --hicache-size.
+-  - --enable-hierarchical-cache
+-  - --hicache-ratio
+-  - '4'
+-  - --enable-metrics
+-  env: []
+-
+-# Port the engine listens on; must match the engine args.
++  - name: VLLM_USE_V2_MODEL_RUNNER
++    value: '1'
++  - name: VLLM_SPARSE_INDEXER_MAX_LOGITS_MB
++    value: '128'
++  - name: VLLM_ENGINE_READY_TIMEOUT_S
++    value: '3600'
++  - name: VLLM_LOGGING_LEVEL
++    value: INFO
++  - name: PCAI_ENGRAM_DIR
++    value: /local-model
++  - name: VLLM_EXL3_REQUIRE_UVA_EXPERTS
++    value: '1'
++  - name: VLLM_EXL3_MEM_PROBE
++    value: '1'
++# Other engines require an explicit image, args, env and compatible model PVC.
+ port: 8080
+-
++# Independently verified EAQ body, mounted read-only.
+ model:
+-  # Existing PVC holding the weights, mounted read-only at mountPath.
+-  existingClaim: model-deepseek-v4-flash-0731
++  existingClaim: model-deepseek-v41-eaq-v11
+   mountPath: /models
+-  # Init check against the completion record a preparation job writes to
+-  # <mountPath>/.pcai-preparation/complete.json. Set enabled: false for unprepared claims.
+   verify:
+     enabled: true
+-    revision: 7872f01b1d1fe23eabc4c98b48bffcef5a386062
+-    manifestSha256: 573dcd8294f2c479d6caa0ac8114e07d14b72f71ecd156780c91b4c37768e095
+-    files: 74
+-    bytes: 166898661074
+-    markerId: b9686c13-35ff-4c66-8e63-c10ab2bf0c87
+-
+-# Optional selected-file staging to disk-backed emptyDir at /local-model.
+-# Files must carry SHA256 + exact size, and the source PVC needs a pinned receipt.
+-localModel:
+-  enabled: false
+-  sizeLimit: 230Gi
+-  freeHeadroom: 32Gi
+-  existingClaim: ""
+-  sourceVerify: {enabled: true}
+-  files: []
+-
+-# Existing Secret with the bearer key clients must send.
++    revision: aee640e2afba93be683bb5b9b420115fe7fbac20
++    manifestSha256: 56616e27a224a78007f67acd05ceed3435241d31a824755748cc3207a460d990
++    files: 47
++    bytes: 210800717506
++    markerId: b4f947d1-740f-4017-abfb-7136c119b664
+ apiKey:
+   existingSecret: vllm-deepseek-api
+   secretKey: api-key
+-
+ gpu:
+   count: 2
+-  # PCAI GPU admission: more than one GPU requires "whole".
+   migSizes: whole
+-
++# SHM is memory-backed; the separate Engram table volume is NOT.
+ shm:
+-  sizeLimit: 64Gi
+-
+-# Persistent kernel/compile caches (DeepGEMM, Triton, Inductor, TileLang, FlashInfer).
+-# Without it every restart recompiles; SGLang's DeepGEMM precompile alone takes minutes.
++  sizeLimit: 16Gi
+ cache:
+   enabled: true
+-  # Use an existing claim, or leave empty to create <release>-compile-cache.
+-  existingClaim: ""
++  existingClaim: ''
+   size: 50Gi
+   storageClass: nfs-csi
+   accessMode: ReadWriteOnce
+-
+ resources:
+   requests:
+     cpu: '8'
+-    memory: 204Gi
++    memory: 320Gi
++    ephemeral-storage: 240Gi
+   limits:
+-    cpu: '16'
+-    memory: 256Gi
+-
+-# Seconds the engine may take to become healthy (weights + compile + graph capture).
++    cpu: '32'
++    memory: 320Gi
++    ephemeral-storage: 260Gi
+ startupTimeoutSeconds: 3600
+-
+-# PCAI identity used by GPU admission: app is the release name.
+ component: inference
+-
+-# Image for the storage/shm init check; needs only python3.
+ checkImage: ghcr.io/enthus-appdev/pcai-inference-probe@sha256:32699bbda49ca935b558650732ba3b9edf105ed2197e530b224aa5dacf8d9cae
+-
+ podSecurityContext:
+   runAsNonRoot: true
+   runAsUser: 10000004
+@@ -162,9 +123,6 @@ podSecurityContext:
+   fsGroupChangePolicy: OnRootMismatch
+   seccompProfile:
+     type: RuntimeDefault
+-
+-# Private access through a userspace WireGuard tunnel carried over authenticated
+-# WebSocket/TLS. Each release needs its own peer identity Secret.
+ wireguard:
+   enabled: true
+   existingSecret: vllm-deepseek-wireguard
+@@ -176,3 +134,27 @@ wireguard:
+     endpoint: wss://bifrost.fankserver.com
+     pathPrefix: pcai-wireguard
+     image: ghcr.io/enthus-appdev/pcai-inference-probe@sha256:67a75f3507ce6c0bded9c1d993026c52f8e7eaa10a193a19bbe9d0f245fb5e48
++# Original Engram tables: stage only these hash-pinned files to disk emptyDir.
++# Source receipt, current free space, input hashes and destination hashes are checked.
++localModel:
++  enabled: true
++  existingClaim: model-deepseek-v41-flash-1017
++  sourceVerify:
++    enabled: true
++    revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
++    manifestSha256: 3d15864cba81a2c4520e992e6c787b3ff6e8e4ba9cc26e847f0f43bc77388b1c
++    files: 83
++    bytes: 510311045295
++    markerId: 7db24a33-650a-405b-83e3-2104e0e3093d
++  files:
++  - path: model-00047-of-00048.safetensors
++    size: 101535150936
++    sha256: 76a05106ece259be83d1bfea0dcb54f23377864ee60fd321690f35e6698a2af5
++  - path: model-00048-of-00048.safetensors
++    size: 101537926640
++    sha256: 9dc51433e195bc78b5ad846b68643cc0351d3b174e5e4309222d3b7402c83afd
++  - path: model.safetensors.index.json
++    size: 7470294
++    sha256: 74b0686a3d2891980d5e303251b075a3bccae2c2ff650747db2620a649b98fa8
++  sizeLimit: 230Gi
++  freeHeadroom: 32Gi
+diff --git a/checks/test_chart.py b/checks/test_chart.py
+index e8392c8..08c029a 100644
+--- a/checks/test_chart.py
++++ b/checks/test_chart.py
+@@ -12,6 +12,19 @@ CHART = ROOT / "charts/pcai-inference"
+ NS = "florian-kinder--6a39d4dc"
+
+
++def native_sglang_values():
++    return {
++        "engine": "sglang",
++        "model": {"existingClaim": "model-native-fp8", "verify": {"enabled": False}},
++        "localModel": {"enabled": False},
++        "sglang": {
++            "image": "ghcr.io/enthus-appdev/sglang-pcai@sha256:fabaf61c6f2a939ecb31680340d97561412bf74a66b3a9102dc1dcfdf4ad8793",
++            "args": ["--model-path", "/models/native", "--hicache-ratio", "4"],
++            "env": [],
++        },
++    }
++
++
+ def render(values=None, success=True, release="deepseek-v4-flash"):
+     with tempfile.TemporaryDirectory() as directory:
+         path = Path(directory) / "values.json"
+@@ -61,14 +74,14 @@ class Defaults(unittest.TestCase):
+     def test_recreate_and_single_replica(self):
+         d = deployment(render())
+         self.assertEqual(d["spec"]["strategy"], {"type": "Recreate"})
+-        self.assertEqual(d["spec"]["replicas"], 1)
++        self.assertEqual(d["spec"]["replicas"], 0)
+
+     def test_model_readonly_and_shm(self):
+         spec = deployment(render())["spec"]["template"]["spec"]
+         vols = {v["name"]: v for v in spec["volumes"]}
+-        self.assertEqual(vols["model"]["persistentVolumeClaim"], {"claimName": "model-deepseek-v4-flash-0731", "readOnly": True})
+-        self.assertEqual(vols["shm"]["emptyDir"], {"medium": "Memory", "sizeLimit": "64Gi"})
+-        for c in spec["containers"][:1] + spec["initContainers"]:
++        self.assertEqual(vols["model"]["persistentVolumeClaim"], {"claimName": "model-deepseek-v41-eaq-v11", "readOnly": True})
++        self.assertEqual(vols["shm"]["emptyDir"], {"medium": "Memory", "sizeLimit": "16Gi"})
++        for c in spec["containers"][:1] + spec["initContainers"][:1]:
+             mounts = {m["name"]: m for m in c["volumeMounts"]}
+             self.assertTrue(mounts["model"]["readOnly"])
+
+@@ -110,16 +123,28 @@ class Engines(unittest.TestCase):
+             self.assertTrue(e[name]["value"].startswith("/cache/vllm/"), name)
+         self.assertEqual(e["HF_HUB_OFFLINE"]["value"], "1")
+         self.assertNotIn("command", c)
+-        self.assertEqual(c["args"][0], "/models/revisions/7872f01b1d1fe23eabc4c98b48bffcef5a386062")
++        self.assertEqual(c["args"][0], "/models/revisions/aee640e2afba93be683bb5b9b420115fe7fbac20")
++        self.assertEqual(c["image"], "ghcr.io/enthus-appdev/vllm-pcai@sha256:a989e911ba26f2120196f4ba4a3b92701b202dee5e853776c58096305ecb3388")
+
+-    def test_vllm_production_arguments_kept(self):
+-        a = engine_container(render())["args"]
+-        self.assertEqual(a[a.index("--gpu-memory-utilization") + 1], "0.95")
+-        self.assertEqual(a[a.index("--max-num-batched-tokens") + 1], "1024")
++    def test_vllm_bounded_eaq_arguments_are_defaults(self):
++        c = engine_container(render())
++        a = c["args"]
++        self.assertEqual(a[a.index("--gpu-memory-utilization") + 1], "0.85")
++        self.assertEqual(a[a.index("--max-num-batched-tokens") + 1], "512")
+         self.assertEqual(a[a.index("--tensor-parallel-size") + 1], "2")
++        self.assertEqual(a[a.index("--max-num-seqs") + 1], "1")
++        self.assertEqual(a[a.index("--max-model-len") + 1], "8192")
++        self.assertEqual(a[a.index("--quantization") + 1], "exl3")
++        self.assertEqual(a[a.index("--kv-cache-memory-bytes") + 1], "4294967296")
++        self.assertIn("--enforce-eager", a)
++        self.assertIn("--no-async-scheduling", a)
++        self.assertFalse(any("speculative" in x or "kv-transfer" in x for x in a))
++        self.assertEqual(env(c)["PCAI_ENGRAM_DIR"]["value"], "/local-model")
++        self.assertEqual(c["resources"]["requests"]["memory"], "320Gi")
++        self.assertEqual(c["resources"]["limits"]["memory"], "320Gi")
+
+     def test_sglang_key_from_file_not_spec(self):
+-        docs = render({"engine": "sglang"})
++        docs = render(native_sglang_values())
+         c = engine_container(docs)
+         self.assertEqual(c["name"], "sglang")
+         self.assertEqual(c["command"][:2], ["/bin/sh", "-c"])
+@@ -132,20 +157,20 @@ class Engines(unittest.TestCase):
+         self.assertEqual(vols["api-key"]["secret"]["secretName"], "vllm-deepseek-api")
+
+     def test_sglang_cache_layout_left_to_sglang(self):
+-        e = env(engine_container(render({"engine": "sglang"})))
++        e = env(engine_container(render(native_sglang_values())))
+         self.assertEqual(e["SGLANG_CACHE_DIR"]["value"], "/cache/sglang")
+         for name in ("TRITON_CACHE_DIR", "TORCHINDUCTOR_CACHE_DIR", "CUDA_CACHE_PATH", "TILELANG_CACHE_DIR", "FLASHINFER_WORKSPACE_BASE"):
+             self.assertNotIn(name, e)
+
+     def test_sglang_known_pitfalls_absent(self):
+-        a = engine_container(render({"engine": "sglang"}))["args"]
++        a = engine_container(render(native_sglang_values()))["args"]
+         self.assertNotIn("--hicache-size", a)
+         self.assertNotIn("--flashinfer-mxfp4-moe-precision", a)
+         self.assertIn("--hicache-ratio", a)
+
+     def test_engine_switch_keeps_identity(self):
+         for engine in ("vllm", "sglang"):
+-            docs = render({"engine": engine})
++            docs = render(native_sglang_values() if engine == "sglang" else {"engine": engine})
+             svc = next(d for d in docs if d["kind"] == "Service")
+             self.assertEqual(svc["metadata"]["name"], "deepseek-v4-flash")
+             self.assertEqual(deployment(docs)["metadata"]["name"], "deepseek-v4-flash")
+@@ -184,7 +209,8 @@ class Options(unittest.TestCase):
+     def test_verify_enabled_passes_record(self):
+         init = deployment(render())["spec"]["template"]["spec"]["initContainers"][0]
+         record = json.loads(env(init)["MODEL_VERIFY"]["value"])
+-        self.assertEqual(record["files"], 74)
++        self.assertEqual(record["files"], 47)
++        self.assertEqual(record["revision"], "aee640e2afba93be683bb5b9b420115fe7fbac20")
+
+     def test_startup_window(self):
+         c = engine_container(render({"startupTimeoutSeconds": 1800}))
+@@ -198,6 +224,7 @@ class Rejections(unittest.TestCase):
+     def test_invalid_values_rejected(self):
+         for values in [
+             {"engine": "tgi"},
++            {"engine": "sglang"},  # No misleading native-weight preset for this EXL3 pack.
+             {"replicaCount": 2},
+             {"vllm": {"image": "ghcr.io/enthus-appdev/vllm-pcai:latest"}},
+             {"gpu": {"count": 2, "migSizes": "small"}},
+diff --git a/checks/test_local_model.py b/checks/test_local_model.py
+index c5b6e72..c826206 100644
+--- a/checks/test_local_model.py
++++ b/checks/test_local_model.py
+@@ -25,8 +25,8 @@ def config(data=b'test'):
+
+
+ class LocalModelChart(unittest.TestCase):
+-    def test_disabled_default(self):
+-        spec = deployment(render())['spec']['template']['spec']
++    def test_explicitly_disabled(self):
++        spec = deployment(render({'localModel': {'enabled': False}}))['spec']['template']['spec']
+         self.assertNotIn('local-model', [v['name'] for v in spec['volumes']])
+         self.assertEqual(len(spec['initContainers']), 1)
+
+@@ -47,8 +47,22 @@ class LocalModelChart(unittest.TestCase):
+         self.assertTrue(mounts['local-source']['readOnly'])
+         self.assertNotIn('nvidia.com/gpu', init['resources']['limits'])
+
++    def test_default_is_exact_engram_staging(self):
++        spec = deployment(render())['spec']['template']['spec']
++        self.assertEqual([c['name'] for c in spec['initContainers']], ['storage-check', 'local-model-stage'])
++        c = spec['initContainers'][1]
++        manifest = json.loads(next(x['value'] for x in c['env'] if x['name'] == 'LOCAL_MODEL'))
++        self.assertEqual(manifest['existingClaim'], 'model-deepseek-v41-flash-1017')
++        self.assertEqual(manifest['sourceVerify']['revision'], '1bae0e1088993b9b82de08f59de5be5a34e42170')
++        self.assertEqual(len(manifest['files']), 3)
++        self.assertEqual(sum(x['size'] for x in manifest['files']), 203080547870)
++        self.assertEqual(manifest['sizeLimit'], '230Gi')
++        volumes = {x['name']: x for x in spec['volumes']}
++        self.assertEqual(volumes['local-model']['emptyDir'], {'sizeLimit': '230Gi'})
++        self.assertEqual(spec['containers'][0]['resources']['requests']['ephemeral-storage'], '240Gi')
++
+     def test_reject_unpinned_or_unreserved_staging(self):
+-        render({'localModel': config()}, success=False)
++        render({'localModel': config(), 'resources': {'requests': {'ephemeral-storage': None}}}, success=False)
+         for field, value in [('existingClaim', ''), ('files', []), ('sourceVerify', {'enabled': False})]:
+             c = config()
+             c[field] = value
