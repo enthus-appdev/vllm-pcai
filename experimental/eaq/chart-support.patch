@@ -1,7 +1,7 @@
 From 001f6df2192768582777d4cbd4908d48dc124761 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:12:34 +0100
-Subject: [PATCH 1/7] feat: add hash-verified local model staging
+Subject: [PATCH 01/10] feat: add hash-verified local model staging
 
 ---
  LOCAL-MODEL-STAGING.md                        |  36 ++++++
@@ -477,7 +477,7 @@ index 0000000..c5b6e72
 From cedd8f23712c010ab4d28c93b9e724ed2d7fb5ec Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:41:59 +0100
-Subject: [PATCH 2/7] build: exclude Python cache files from chart archives
+Subject: [PATCH 02/10] build: exclude Python cache files from chart archives
 
 ---
  charts/pcai-inference/.helmignore | 4 ++++
@@ -498,7 +498,7 @@ index 0000000..2c44691
 From 1d8bae20be9ecfa8ca9df5e498f2aad17df119c3 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:04:08 +0100
-Subject: [PATCH 3/7] fix: make exact EAQ preparation settings the chart
+Subject: [PATCH 03/10] fix: make exact EAQ preparation settings the chart
  defaults
 
 ---
@@ -1029,7 +1029,7 @@ index c5b6e72..c826206 100644
 From 18d6e18c0be3c1f2ced938cd242ca33960bb4fdc Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:41:42 +0100
-Subject: [PATCH 4/7] fix: keep the chart generic and inference-only
+Subject: [PATCH 04/10] fix: keep the chart generic and inference-only
 
 ---
  README.md                                 |   4 +-
@@ -1425,7 +1425,7 @@ index 08c029a..75d940e 100644
 From 926a00a4fea6fe5c183d585d1227c09b32a6044e Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:52:33 +0100
-Subject: [PATCH 5/7] feat: route inference through the PCAI platform gateway
+Subject: [PATCH 05/10] feat: route inference through the PCAI platform gateway
 
 ---
  README.md                                     |  3 +-
@@ -1613,8 +1613,8 @@ index 75d940e..5415f7e 100644
 From 1092f610df1c73b04861fe66bafc36ac4b3d55f2 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 16:14:37 +0100
-Subject: [PATCH 6/7] refactor: typed, minimal chart values; verification from
- the prepared volumes
+Subject: [PATCH 06/10] refactor: typed, minimal chart values; verification
+ from the prepared volumes
 
 ---
  LOCAL-MODEL-STAGING.md                        |  36 --
@@ -3993,7 +3993,7 @@ index d44ca1b..0000000
 From a20c29e19e5147a5161b3d0fa6df6dbeb13dc465 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 16:20:04 +0100
-Subject: [PATCH 7/7] fix: render integer serving limits without exponent
+Subject: [PATCH 07/10] fix: render integer serving limits without exponent
  notation
 
 ---
@@ -4066,3 +4066,82 @@ index 3498a61..e119fb1 100644
      def test_serving_value_can_be_unset(self):
          a = engine(render({"serving": {"maxNumSeqs": None}}))["args"]
          self.assertNotIn("--max-num-seqs", a)
+
+From bcaa0085c928364a6110e5229c8ea0f91d03be50 Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 17:18:22 +0100
+Subject: [PATCH 08/10] feat: EAQ dense layers as BF16 and exact-size pinned
+ host buffers
+
+---
+ charts/pcai-inference/values.yaml | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/charts/pcai-inference/values.yaml b/charts/pcai-inference/values.yaml
+index 12bb3e3..00494ca 100644
+--- a/charts/pcai-inference/values.yaml
++++ b/charts/pcai-inference/values.yaml
+@@ -8,7 +8,7 @@ engine: vllm
+ image:
+   repository: ghcr.io/enthus-appdev/vllm-pcai
+   # vLLM build with EXL3 kernels and the disk-backed Engram reader.
+-  digest: sha256:a989e911ba26f2120196f4ba4a3b92701b202dee5e853776c58096305ecb3388
++  digest: sha256:4189a23e150255f1b83b573ee20d4fe3fb81fa4e680b28f028ea4667335b94f5
+
+ model:
+   # Prepared model PVC (mounted read-only) and the revision to serve from it.
+@@ -54,6 +54,10 @@ env:
+   VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: "128"
+   VLLM_ENGINE_READY_TIMEOUT_S: "3600"
+   VLLM_EXL3_REQUIRE_UVA_EXPERTS: "1"
++  # EAQ also quantizes attention, shared experts and the head: load those as BF16.
++  PCAI_EXL3_DENSE: bf16
++  # Pinned host buffers are otherwise rounded up to a power of two (up to 2x).
++  PYTORCH_ALLOC_CONF: pinned_max_round_threshold_mb:64
+   # Read the Engram tables from the staged copy below instead of host RAM.
+   PCAI_ENGRAM_DIR: /staged
+
+
+From 2b3a43615922eb540b6ebe7b6bca40ca6ecf9f50 Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 18:53:22 +0100
+Subject: [PATCH 09/10] feat: serve EAQ with the physical-K MoE fix image
+
+---
+ charts/pcai-inference/values.yaml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/charts/pcai-inference/values.yaml b/charts/pcai-inference/values.yaml
+index 00494ca..c640f63 100644
+--- a/charts/pcai-inference/values.yaml
++++ b/charts/pcai-inference/values.yaml
+@@ -8,7 +8,7 @@ engine: vllm
+ image:
+   repository: ghcr.io/enthus-appdev/vllm-pcai
+   # vLLM build with EXL3 kernels and the disk-backed Engram reader.
+-  digest: sha256:4189a23e150255f1b83b573ee20d4fe3fb81fa4e680b28f028ea4667335b94f5
++  digest: sha256:0f7f625b259d50d3a071f7aaee3aa51eae1658fa023eabadb7836ce4ccc8050a
+
+ model:
+   # Prepared model PVC (mounted read-only) and the revision to serve from it.
+
+From bcc0360d724680b4782311ad2ea8927e3d0a68ef Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 19:23:47 +0100
+Subject: [PATCH 10/10] chore: release 0.3.1
+
+---
+ charts/pcai-inference/Chart.yaml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/charts/pcai-inference/Chart.yaml b/charts/pcai-inference/Chart.yaml
+index befcf5a..a7e882c 100644
+--- a/charts/pcai-inference/Chart.yaml
++++ b/charts/pcai-inference/Chart.yaml
+@@ -2,5 +2,5 @@ apiVersion: v2
+ name: pcai-inference
+ description: Generic inference server for PCAI custom frameworks - selectable engine, read-only model PVCs, optional local model staging, compile cache and private access
+ type: application
+-version: 0.3.0
++version: 0.3.1
+ home: https://github.com/enthus-appdev/pcai-inference
