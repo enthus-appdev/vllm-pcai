@@ -27,6 +27,20 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
+## Experimental stability bundle
+
+This branch adds only the following bundle to image PR #62's source baseline:
+- [#63427](https://github.com/vllm-project/vllm/pull/63427), head `6ee3f40d6137b487617e2ab1e5ff1a13402a0cda`: recursively weak-reference nested graph outputs.
+- [#54163](https://github.com/vllm-project/vllm/pull/54163), head `3088df4c8770f859e23de3326d0c6dc8ce37f1a7`: preserve DFlash/DSpark's trailing prefix block. Config context is adapted to v0.32.0 (without newer XPRESS code); broad EAGLE lookahead and #48023 remain intact.
+- [#60553](https://github.com/vllm-project/vllm/pull/60553), head `5a675fa4d91def4031bc19e5d9bb016a69494d2d`: encoder-cache progress at adjacent-image/lookahead boundaries.
+- [#59030](https://github.com/vllm-project/vllm/pull/59030), head `54e0b57e7c95f48d04f0d365cb2da0cc126071da`: requeue encoder-stalled waiting requests.
+
+The production-only bundle is pinned in `patches/vision-stability-v032.patch`.
+No extra runtime flag is needed. The CPU tripwire executes isolated source predicates,
+nested-reference behavior with stand-ins, and encoder reclamation boundaries; it does
+not qualify actual CUDA graph lifetimes, multi-image scheduling or GPU outputs.
+Run `python3 -m unittest discover -s tests -v` for local integrity checks.
+
 ## Base image: `v0.32.0`
 
 The `FROM` uses the **[v0.32.0 release](https://github.com/vllm-project/vllm/releases/tag/v0.32.0)**. This retains the ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, packed heterogeneous-KV support, and OffloadingConnector bounds fix ([#52923](https://github.com/vllm-project/vllm/pull/52923)). It also updates Hopper's quantization backend selection; performance still requires workload-specific GPU validation. Building or publishing this image does not redeploy an existing model service.

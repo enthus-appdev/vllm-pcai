@@ -91,6 +91,19 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
         self.assertIn("python3 /tmp/verify_swa_admission_patch.py", dockerfile)
 
+    def test_pinned_stability_bundle(self):
+        patch = ROOT / "patches/vision-stability-v032.patch"
+        digest = "185ef3b32eab7aefab857e81de107b5714ed94525df654712e1616753f2b7668"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
+        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
+                 if line.startswith("diff --git ")}
+        self.assertEqual(paths, {"vllm/config/speculative.py", "vllm/utils/torch_utils.py",
+                                 "vllm/v1/core/sched/scheduler.py"})
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn(digest, dockerfile)
+        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
+        self.assertIn("python3 /tmp/verify_stability_patch.py", dockerfile)
+
     def test_git_can_parse_every_patch(self):
         patches = sorted((ROOT / "patches").glob("*.patch"))
         self.assertTrue(patches, "No vendored patches found")
