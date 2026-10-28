@@ -16,6 +16,20 @@ retains complete dependency sources/notices under /opt/pcai-sources. vllm-exl3
 is AGPL-3.0-only; ExLlamaV3 is MIT. Preserve those notices and source availability
 when distributing the derivative. Our adapter does not copy their implementation.
 
+## EXL3 dense layers (`PCAI_EXL3_DENSE=bf16`)
+
+Mixed packs such as EAQ v1.1 also quantize attention (`wq_a`, `wkv`, `wq_b`,
+`wo_a` as eight group slices, `wo_b`), shared experts, Engram `wkv` and the LM
+head. vLLM's DeepSeek V4.1 model has no EXL3 path for those layers. With this
+variable set, the plugin routes them to ordinary BF16 layers and reconstructs
+their EXL3 tensors once while loading, using ExLlamaV3's reference
+reconstruction (`LinearEXL3.get_weight_tensor`). Routed experts stay on the
+EXL3 kernels. The cost is about 13.8 GiB of BF16 weights across both GPUs.
+
+`verify_dense.py` checks this path on a GPU against the original checkpoint.
+On EAQ v1.1 it measured relative errors of 2.1% (6-bit), 3.7-4.3% (5-bit) and
+7.0-7.3% (4-bit), cosine >= 0.997, and confirmed `wo_a` group order.
+
 ## Adapter contract
 
 PCAI_ENGRAM_DIR activates the plugin and points at the staged directory holding
