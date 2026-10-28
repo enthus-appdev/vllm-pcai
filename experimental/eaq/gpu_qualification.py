@@ -117,17 +117,27 @@ def main():
     torch.cuda.set_device(rank)
     if torch.cuda.get_device_capability(rank) != (9, 0):
         raise RuntimeError('this fixture is specifically for H100/sm90')
-    from vllm.distributed import init_distributed_environment, initialize_model_parallel
-    init_distributed_environment(world_size=2, rank=rank, local_rank=rank,
-                                 backend='nccl', timeout=timedelta(seconds=180))
-    initialize_model_parallel(tensor_model_parallel_size=2, pipeline_model_parallel_size=1,
-                              backend='nccl')
-    native_smoke()
-    engram_smoke(Path('/fixtures/even'), (11, 13, 17, 19))
-    engram_smoke(Path('/fixtures/padded'), (11, 13, 17))
-    print(json.dumps({'rank': rank, 'synthetic_smoke': 'PASS',
-                      'full_model_qualified': False}), flush=True)
-    dist.destroy_process_group()
+    from vllm.config import VllmConfig, ParallelConfig, set_current_vllm_config
+    from vllm.distributed import (
+        init_distributed_environment, initialize_model_parallel,
+        destroy_model_parallel, destroy_distributed_environment,
+    )
+    # vLLM group initialization needs a real config context even without a model.
+    config = VllmConfig(parallel_config=ParallelConfig(tensor_parallel_size=2))
+    with set_current_vllm_config(config):
+        try:
+            init_distributed_environment(world_size=2, rank=rank, local_rank=rank,
+                                         backend='nccl', timeout=timedelta(seconds=180))
+            initialize_model_parallel(tensor_model_parallel_size=2, pipeline_model_parallel_size=1,
+                                      backend='nccl')
+            native_smoke()
+            engram_smoke(Path('/fixtures/even'), (11, 13, 17, 19))
+            engram_smoke(Path('/fixtures/padded'), (11, 13, 17))
+            print(json.dumps({'rank': rank, 'synthetic_smoke': 'PASS',
+                              'full_model_qualified': False}), flush=True)
+        finally:
+            destroy_model_parallel()
+            destroy_distributed_environment()
 
 
 if __name__ == '__main__':

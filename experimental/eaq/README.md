@@ -50,11 +50,12 @@ native GEMV with a dequantized reference and disk Engram with the stock CUDA
 lookup, including real vLLM TP gathering. A pass does not qualify full-model
 loading, cooperative expert kernels, UVA placement, quality or performance.
 
-The companion `chart-support.patch` contains the staging chart and its exact EAQ
-candidate defaults (published image, verified PVCs, disk staging and bounded
-resources). No override file is required. Its default replica count is zero;
-installing it does not start inference or run the synthetic GPU test. Source and
-destination staging files are hash-checked before serving begins.
+The companion `chart-support.patch` contains the generic inference chart with
+configurable engine, model storage, optional selected-file disk staging, resources
+and access. Its defaults select the current EAQ profile and start one real serving
+replica; no override file is required. It contains no test mode or qualification
+Jobs. Tests run independently in the agent's bounded harness. Source and destination
+staging files are hash-checked before serving begins.
 
 ## Release gates
 

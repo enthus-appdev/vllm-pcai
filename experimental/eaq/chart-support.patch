@@ -1,7 +1,7 @@
 From 001f6df2192768582777d4cbd4908d48dc124761 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:12:34 +0100
-Subject: [PATCH 1/3] feat: add hash-verified local model staging
+Subject: [PATCH 1/4] feat: add hash-verified local model staging
 
 ---
  LOCAL-MODEL-STAGING.md                        |  36 ++++++
@@ -477,7 +477,7 @@ index 0000000..c5b6e72
 From cedd8f23712c010ab4d28c93b9e724ed2d7fb5ec Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 13:41:59 +0100
-Subject: [PATCH 2/3] build: exclude Python cache files from chart archives
+Subject: [PATCH 2/4] build: exclude Python cache files from chart archives
 
 ---
  charts/pcai-inference/.helmignore | 4 ++++
@@ -498,7 +498,7 @@ index 0000000..2c44691
 From 1d8bae20be9ecfa8ca9df5e498f2aad17df119c3 Mon Sep 17 00:00:00 2001
 From: Florian Kinder <florian.kinder@enthus.de>
 Date: Wed, 28 Oct 2026 15:04:08 +0100
-Subject: [PATCH 3/3] fix: make exact EAQ preparation settings the chart
+Subject: [PATCH 3/4] fix: make exact EAQ preparation settings the chart
  defaults
 
 ---
@@ -1025,3 +1025,91 @@ index c5b6e72..c826206 100644
          for field, value in [('existingClaim', ''), ('files', []), ('sourceVerify', {'enabled': False})]:
              c = config()
              c[field] = value
+
+From 18d6e18c0be3c1f2ced938cd242ca33960bb4fdc Mon Sep 17 00:00:00 2001
+From: Florian Kinder <florian.kinder@enthus.de>
+Date: Wed, 28 Oct 2026 15:41:42 +0100
+Subject: [PATCH 4/4] fix: keep the chart generic and inference-only
+
+---
+ README.md                                 |   4 +-
+ charts/pcai-inference/Chart.yaml          |   4 +-
+ charts/pcai-inference/templates/NOTES.txt |  16 +-
+ charts/pcai-inference/values.yaml         | 260 ++++++++++++----------
+ checks/test_chart.py                      |  16 +-
+ 5 files changed, 163 insertions(+), 137 deletions(-)
+
+diff --git a/README.md b/README.md
+index ca8e497..ee84bc9 100644
+--- a/README.md
++++ b/README.md
+@@ -8,12 +8,12 @@ Helm chart for running an LLM server as an **HPE PCAI custom framework**. One ch
+ - **Access:** an optional private WireGuard tunnel carried over authenticated WebSocket/TLS.
+ - **Security:** API-key authentication from an existing Secret; everything runs non-root without added capabilities.
+
+-Defaults are the exact **DeepSeek V4.1 Flash 1017 EAQ v1.1 candidate**: published EXL3 image, verified EAQ model PVC, disk-backed original Engram staging, C1/8K/eager settings and bounded resources. No override file is required. **`replicaCount: 0` is intentional: importing the chart does not start inference.** GPU qualification is required before an attended model boot.
++This chart deploys **only the real inference workload**: a Deployment, Service, storage checks, optional local model staging, and compile-cache PVC. It contains no qualification mode or test Jobs. Defaults select the current DeepSeek V4.1 EAQ profile, including its image, verified model PVCs, disk-backed Engram staging and resources. **Installing the chart starts one inference replica.** Engine/model qualification is performed separately, not by this chart.
+
+ ## Install
+
+ 1. Prepare the model PVC, the API-key Secret and, for VPN access, a WireGuard peer Secret. The chart only references them and never creates them.
+-2. In PCAI, import the packaged chart as a custom framework. The default configuration stages a zero-replica Deployment; no serving pod starts. Keep the selected release name for later updates; pod admission keys on that name.
++2. In PCAI, import the packaged chart as a custom framework. Keep the selected release name for later updates; pod admission keys on that name. The default replica count is one.
+ 3. Make every later change by **editing the framework's values**, not by reinstalling: PCAI refuses a second install under a release name that is in use.
+
+ Only one pod runs at a time (`Recreate`), because GPUs and the WireGuard identity cannot be shared. A values change that touches the pod template restarts the server and reloads the model.
+diff --git a/charts/pcai-inference/Chart.yaml b/charts/pcai-inference/Chart.yaml
+index db5de4d..2c58c09 100644
+--- a/charts/pcai-inference/Chart.yaml
++++ b/charts/pcai-inference/Chart.yaml
+@@ -1,6 +1,6 @@
+ apiVersion: v2
+ name: pcai-inference
+-description: PCAI model server - exact DeepSeek V4.1 EAQ v1.1 candidate defaults, disk-backed Engram staging, zero replicas until GPU qualification
++description: Generic inference server for PCAI custom frameworks - selectable engine, read-only model PVCs, optional local model staging, compile cache and private access
+ type: application
+-version: 0.2.0-rc.2
++version: 0.2.0
+ home: https://github.com/enthus-appdev/pcai-inference
+diff --git a/charts/pcai-inference/templates/NOTES.txt b/charts/pcai-inference/templates/NOTES.txt
+index cdf94a1..a937791 100644
+--- a/charts/pcai-inference/templates/NOTES.txt
++++ b/charts/pcai-inference/templates/NOTES.txt
+@@ -1,11 +1,7 @@
+-{{- if eq (int .Values.replicaCount) 0 }}
+-PREPARATION ONLY: {{ .Release.Name }} has zero replicas. No inference pod is started.
+-The chart defaults are the DeepSeek V4.1 EAQ v1.1 candidate, including its published
+-image, verified model PVCs, disk-backed Engram staging and bounded resources.
+-Complete the approved two-H100/TP2 synthetic test before an attended model boot.
+-Changing replicaCount to 1 starts the full model; it does not run that synthetic test.
+-{{- else }}
+-{{ .Release.Name }} requests {{ .Values.replicaCount }} serving replica.
+-Monitor startup and stop on the first initialization failure or node pressure.
+-Do not raise the memory limit automatically to force the model to load.
++{{ .Release.Name }} is configured for {{ .Values.replicaCount }} {{ .Values.engine }} inference replica.
++Image: {{ (index .Values .Values.engine).image }}
++Model PVC: {{ .Values.model.existingClaim }}
++{{- if .Values.localModel.enabled }}
++Selected files are staged from {{ .Values.localModel.existingClaim }} to disk before startup.
+ {{- end }}
++The Service exposes port {{ .Values.port }}. Readiness requires a healthy inference server.
+diff --git a/charts/pcai-inference/values.yaml b/charts/pcai-inference/values.yaml
+index 4d62685..2eb124f 100644
+--- a/charts/pcai-inference/values.yaml
++++ b/charts/pcai-inference/values.yaml
+@@ -1,83 +1,83 @@
+-# DeepSeek V4.1 Flash 1017 EAQ v1.1 — exact candidate defaults.
+-# No override values file is needed for this preparation configuration.
+-# Zero replicas intentionally: installing the chart does NOT start inference.
+-# The synthetic two-H100/TP2 test must pass before an attended model boot.
+-# Do not raise the 320Gi memory limit to force initialization to succeed.
+-replicaCount: 0
++# Generic inference workload; defaults select the current DeepSeek V4.1 EAQ profile.
++# Installing this chart starts the real server. Tests are managed separately.
++# Configure engine arguments, model storage and resources together for another model.
++
++replicaCount: 1
++
+ engine: vllm
+
+[Showing lines 1-1113 of 1424 (50.0KB limit). Use offset=1114 to continue.]
