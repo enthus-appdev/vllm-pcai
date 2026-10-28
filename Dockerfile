@@ -185,12 +185,8 @@ assert build("s3://other/drafter/", CACHE) == "s3://other/drafter/", "clobbered 
 print("spec-draft model_weights inheritance OK")
 PY
 
-# PCAI fixes /dev/shm at 64 MiB and exposes no way to change it (that needs an emptyDir volume,
-# which PCAI forbids). vllm#48879 added check_shm_free_space, which now refuses to over-commit —
-# correct, but fatal here: MessageQueue's rpc_broadcast_mq honours VLLM_MQ_MAX_CHUNK_BYTES_MB while
-# worker_response_mq (created once PER WORKER) hardcodes the 24 MiB default, so TP=2 needs
-# 2 x 240 MiB no matter what the env var says. Not filed upstream yet; the env var plainly intends
-# to bound shm usage, so one call site ignoring it is a bug.
+# Make worker_response_mq (one per worker) honour VLLM_MQ_MAX_CHUNK_BYTES_MB like rpc_broadcast_mq,
+# so the env var bounds /dev/shm usage. Small-/dev/shm deployments must set it; see README.
 COPY patches/mq-worker-response-honour-chunk-bytes.patch /tmp/mq-chunk.patch
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
@@ -198,12 +194,6 @@ RUN set -eux; \
     else patch -p1 -d "$SITE" < /tmp/mq-chunk.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/mq-chunk.patch
-
-# 1 MiB x 10 chunks: rpc 10 MiB + one 10 MiB response queue per worker = 30 MiB at TP=2, inside the
-# 64 MiB PCAI allows. The 24 MiB default exists for grammar bitmasks at 1024 requests; we serve
-# max-num-seqs 4 (~32 KiB), and an oversized message degrades to a local socket rather than failing.
-# Override per-deployment if a model ever needs bigger messages AND has the shm for them.
-ENV VLLM_MQ_MAX_CHUNK_BYTES_MB=1
 
 # Tripwire: both queue call sites must honour the env var, or a small-/dev/shm host dies at boot
 # after the (very long) weight load. Source-level — constructing a real MessageQueue needs shm.
@@ -215,8 +205,6 @@ sites = re.findall(r"MessageQueue\((?!\s*\)).*?\)", src, re.S)
 assert sites, "no MessageQueue(...) construction found — upstream refactor, re-check the patch"
 bare = [s for s in sites if "max_chunk_bytes" not in s]
 assert not bare, f"MessageQueue built without max_chunk_bytes: {bare}"
-import vllm.envs as envs
-assert envs.VLLM_MQ_MAX_CHUNK_BYTES_MB == 1, envs.VLLM_MQ_MAX_CHUNK_BYTES_MB
 print("all MessageQueue sites honour VLLM_MQ_MAX_CHUNK_BYTES_MB OK")
 PY
 
@@ -278,3 +266,60 @@ assert out.count("<think>") - 1 == out.count("</think>"), f"unbalanced think tag
 assert out.count("<｜end▁of▁sentence｜>") == 1, f"stray mid-turn EOS:\n{out}"
 print("deepseek_v4 encoder merges split assistant turns OK")
 PY
+
+# Poll busy readers' notify sockets so libzmq command backlogs remain bounded.
+# vllm#63165 production-source diff, head d3ada0390ca556e62150a3c751cdd893a2306ebf.
+# No queue-size or CUDA changes.
+COPY patches/63165-shm-notify-backlog.patch /tmp/runtime-fix.patch
+COPY diag/verify_shm_notify_patch.py /tmp/verify_shm_notify_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/runtime-fix.patch | cut -d' ' -f1)" = "468f5d097ad180363cc8133021b96ee7fc16aba1b48e1631a194be79f84ea609"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/runtime-fix.patch; \
+    else patch -p1 -d "$SITE" < /tmp/runtime-fix.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_shm_notify_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/runtime-fix.patch /tmp/verify_shm_notify_patch.py
+
+# CUDA V4 C128 history uses one bounded ring per request, including draft lookahead.
+# Production-source diff from vllm#58074 head f8bb0ba871415a779de33fadcb40ab2ba5acbc09.
+# Python CuTe DSL/Triton JIT only; no compiled csrc changes or weight requantization.
+# CPU tripwire is not GPU correctness qualification; this image is experimental.
+COPY patches/58074-deepseek-v4-c128-circular-state.patch /tmp/runtime-fix.patch
+COPY diag/verify_c128_patch.py /tmp/verify_c128_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/runtime-fix.patch | cut -d' ' -f1)" = "cd299bb8fe6f1e0501d4fa2b63742f08f91549206e88cb6de3b795ffbcb0f9d0"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/runtime-fix.patch; \
+    else patch -p1 -d "$SITE" < /tmp/runtime-fix.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_c128_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/runtime-fix.patch /tmp/verify_c128_patch.py
+
+# Refresh eager CPU-tier recency for prefixes served from the GPU cache.
+# vllm#62444 production-only diff, head a7f3bd29157fb6c96a1eff083cf8fc14136be624.
+# CPU tripwire checks isolated source behavior; GPU serving remains unqualified.
+COPY patches/62444-simple-offload-lru-refresh.patch /tmp/offload-fix.patch
+COPY diag/verify_simple_offload_lru_patch.py /tmp/verify_simple_offload_lru_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "022cf9e9a8d34b6a9330e472ee2fcc887a6c07643eee4b3352d4b1b556d13970"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
+    else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_simple_offload_lru_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/offload-fix.patch /tmp/verify_simple_offload_lru_patch.py
+
+# Count physical held blocks, not null-padded table positions, for SWA admission.
+# vllm#60045 production-only diff, head 843db1462a066076d407bb628098140da4455be5.
+# CPU tripwire checks isolated source behavior; GPU serving remains unqualified.
+COPY patches/60045-swa-admission-held-blocks.patch /tmp/offload-fix.patch
+COPY diag/verify_swa_admission_patch.py /tmp/verify_swa_admission_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "d2e0787a02594e4582ebdad78c92d928fd3f19dfc3bed6d98b192f6cc4c729a4"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
+    else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_swa_admission_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/offload-fix.patch /tmp/verify_swa_admission_patch.py

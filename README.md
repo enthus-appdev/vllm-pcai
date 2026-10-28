@@ -4,15 +4,25 @@ Custom [vLLM](https://github.com/vllm-project/vllm) images for **HPE Private Clo
 
 ## Why this image exists
 
-PCAI's **MLIS** UI cannot mount our volumes, so templates and patches needed by those deployments **must be baked in**. Custom-framework charts can mount PVCs; that is a separate deployment path, not a limitation of this image. This image adds four layers on top of the stock vLLM base:
+This image adds four layers on top of the stock `vllm/vllm-openai` base. They are baked in because MLIS cannot mount volumes (see [Deployment via MLIS](#deployment-via-mlis)). Custom-framework charts can mount PVCs; that is a separate deployment path:
 
 1. **Enhanced chat templates** — Qwen3.5/3.6 hardened templates (hidden historical reasoning, XML tool-call formatting, proper ` response` handling) from [allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix](https://github.com/allanchan339/vLLM-Qwen3-3.5-3.6-chat-template-fix), which are *not* in the base image. (Gemma 4 uses vLLM's **in-image** template at `/vllm-workspace/examples/tool_chat_template_gemma4.jinja`.)
 
 2. **Diagnostics endpoint** — `GET /collect_env` on the serving port reports runtime versions and GPU details. Registered on the active ASGI factory (`vllm.entrypoints.launchers.app`), with a build-time HTTP regression test. The route has no authentication of its own; keep it behind the appliance's authenticated ingress.
 
-3. **Vendored patches** — the `deepseek_v4` generation-control fix ([#46257](https://github.com/vllm-project/vllm/pull/46257), exact source diff from rebased head `3dd748819f25fa64250258cdb059c5b0e4487563`, cleanly applicable to v0.30.0), the speculative drafter weight-source fix ([#48023](https://github.com/vllm-project/vllm/pull/48023)), the consecutive-assistant-message fix ([#50686](https://github.com/vllm-project/vllm/pull/50686)), and PCAI's `/dev/shm` queue-size fix. The former EOS reasoning-leak patch ([#48748](https://github.com/vllm-project/vllm/pull/48748)) is upstream and retained as a regression assertion only.
+3. **Vendored patches** — source fixes applied to the v0.32.0 base:
+   - **DeepSeek generation controls** ([#46257](https://github.com/vllm-project/vllm/pull/46257), head `3dd748819f25fa64250258cdb059c5b0e4487563`) — honor `add_generation_prompt` and `continue_final_message` in the V4/V3.2 encoders.
+   - **Speculative drafter weight source** ([#48023](https://github.com/vllm-project/vllm/pull/48023)) — inherit the target's weight source when a drafter shares its checkpoint.
+   - **Consecutive assistant messages** ([#50686](https://github.com/vllm-project/vllm/pull/50686)) — merge split assistant turns before DeepSeek V4 encoding.
+   - **PCAI queue sizing** — make worker response queues honor `VLLM_MQ_MAX_CHUNK_BYTES_MB` for constrained `/dev/shm`.
+   - **C128 circular state** ([#58074](https://github.com/vllm-project/vllm/pull/58074), head `f8bb0ba871415a779de33fadcb40ab2ba5acbc09`) — use bounded per-request CUDA V4 compressor history with speculative lookahead.
+   - **SHM notification backlog** ([#63165](https://github.com/vllm-project/vllm/pull/63165), head `d3ada0390ca556e62150a3c751cdd893a2306ebf`) — poll busy readers' notification sockets to bound the libzmq command backlog.
+   - **Sliding-window admission** ([#60045](https://github.com/vllm-project/vllm/pull/60045), head `843db1462a066076d407bb628098140da4455be5`) — count held physical blocks, not null-padded positions, when reserving capacity for asynchronous KV loads.
+   - **Eager CPU-cache LRU** ([#62444](https://github.com/vllm-project/vllm/pull/62444), head `a7f3bd29157fb6c96a1eff083cf8fc14136be624`) — refresh CPU-copy recency when a prefix hits on GPU, keeping hot RAM copies from being evicted first.
 
-4. **Build-time tripwire assertions** — each layer ends with a `RUN python3 -c` that asserts the base image carries the expected parser classes, engine features, and config knobs. A bump that breaks any of them fails **here**, not on a GPU pod.
+   The base supplies the EOS reasoning-leak fix ([#48748](https://github.com/vllm-project/vllm/pull/48748)); the image checks it with a regression assertion rather than another patch.
+
+4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
 ## Base image: `v0.32.0`
 
@@ -29,14 +39,27 @@ vllm-pcai/
 ├── Dockerfile                # FROM vllm/vllm-openai:v0.32.0
 │                               + Qwen enhanced templates
 │                               + /collect_env diagnostics route and HTTP regression test
-│                               + DeepSeek V4 parser patches
+│                               + Parser, loader, KV-cache and transport patches
 │                               + Build-time tripwires for all three models
 ├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
-├── diag/                     # collect_env_route.py
-├── patches/                  # v0.30.0-compatible parser, drafter, and PCAI queue fixes
-├── tests/                    # patch syntax checks (python3 -m unittest discover -s tests)
+├── diag/                     # diagnostics route and CPU patch tripwires
+├── patches/                  # v0.32.0 parser, drafter, KV-cache and transport fixes
+├── tests/                    # patch integrity checks (python3 -m unittest discover -s tests)
 └── .dockerignore
 ```
+
+## Deployment via MLIS
+
+**Limitations**
+
+- No volume mounts through the UI. Templates and patches must be in the image.
+- `/dev/shm` is fixed at 64 MiB and cannot be enlarged.
+
+**Requirements**
+
+- Set `VLLM_MQ_MAX_CHUNK_BYTES_MB=1` in the deployment's environment. The image leaves vLLM's default (16 MiB), and with the bundled queue patch the message queues then need about `(TP + 1) × 160 MiB` of `/dev/shm`: 480 MiB at TP=2. vLLM refuses to start when they do not fit. At 1 MiB they need about 30 MiB at TP=2; larger messages fall back to a local socket.
+
+Deployments that mount a larger memory-backed `/dev/shm` volume need no override.
 
 ## Templates available at runtime
 
@@ -46,11 +69,11 @@ vllm-pcai/
 | `/templates/qwen3.5-enhanced.jinja` | this image (allanchan339 fix) |
 | `/vllm-workspace/examples/*.jinja` | stock vLLM templates (incl. Gemma 4) |
 
-## Serving documentation and research
+## Documentation scope
 
-[pcai-llm-serving](https://github.com/enthus-appdev/pcai-llm-serving) is the canonical home for validated serve arguments, model measurements, issue histories and research evidence. It groups model-specific material under `models/<group>/` and cross-cutting engine, platform and hardware research under `research/<topic>/`.
+This public repository documents the image: build instructions, templates, patches, diagnostics and tests. Deployment-specific configurations, operational measurements and research are maintained privately and are not published here.
 
-Keep this repository focused on the image: build instructions, templates, patches, diagnostics and tests. Research reports formerly stored at this top level have moved to the serving-documentation repository; follow its README index rather than maintaining duplicate copies here.
+The vendored-patch list above describes the current image. [C128 state accounting](docs/c128-state-accounting.md) explains the bundled patch's source-level memory geometry; it is not a deployment configuration or GPU qualification.
 
 ## Clone
 
