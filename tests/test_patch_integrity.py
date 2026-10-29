@@ -106,6 +106,22 @@ class PatchIntegrityTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(result.stdout.strip(), "Patch contains no file changes")
 
+    def test_pinned_load_order_patch(self):
+        patch = ROOT / "patches" / "60078-simple-offload-load-after-compute.patch"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), "6efcda2d6eead265dca1c14b1c27175809b5e523226ff15ee10860c4fcd624dc")
+        self.assertIn("6efcda2d6eead265dca1c14b1c27175809b5e523226ff15ee10860c4fcd624dc", (ROOT / "Dockerfile").read_text())
+        self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
+        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
+                 if line.startswith("diff --git ")}
+        self.assertEqual(paths, {"vllm/v1/simple_kv_offload/worker.py"})
+
+    def test_embed_offload_plugin_layout(self):
+        root = ROOT / "plugins" / "pcai_embed_offload"
+        self.assertTrue((root / "pcai_embed_offload.py").is_file())
+        eps = (root / "pcai_embed_offload-1.0.dist-info" / "entry_points.txt").read_text()
+        self.assertIn("pcai_embed_offload = pcai_embed_offload:register", eps)
+        self.assertIn("COPY plugins/pcai_embed_offload ", (ROOT / "Dockerfile").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
