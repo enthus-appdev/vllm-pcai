@@ -1,0 +1,47 @@
+diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
+index 7d4f2d5a..c910dac0 100644
+--- a/vllm/v1/core/kv_cache_coordinator.py
++++ b/vllm/v1/core/kv_cache_coordinator.py
+@@ -131,8 +131,15 @@ class KVCacheCoordinator(ABC):
+         # Conservatively fall back to flag all groups when no group is flagged.
+         if use_eagle and not self.eagle_group_ids:
+             self.eagle_group_ids = set(range(len(kv_cache_config.kv_cache_groups)))
+ 
++        # No-drop single-lookahead drafters lost the older replay checkpoint
++        # that block dropping implicitly retained. Keep a bounded SWA fallback
++        # for siblings whose question diverges inside the latest hash block.
++        self.keep_previous_swa_replay_boundary = (
++            num_prefill_lookahead == 1 and not self.eagle_group_ids
++        )
++
+         # During chunked prefill with EAGLE, the single next prefill lookahead
+         # token past the chunk boundary is combined with the final hidden state
+         # and written to the KV cache. Therefore, the final chunk token must be
+         # excluded from prefix cache hits to prevent requests from acquiring the
+@@ -365,16 +372,25 @@ class KVCacheCoordinator(ABC):
+             request.num_prompt_tokens,
+             self.scheduler_block_size,
+             use_eagle=bool(self.eagle_group_ids),
+         )
++        swa_boundaries = boundaries
++        if self.keep_previous_swa_replay_boundary:
++            block = self.scheduler_block_size
++            latest = (request.num_prompt_tokens - 1) // block * block
++            swa_boundaries = tuple(sorted({*boundaries, max(0, latest - block)}))
+         for group_id, manager in enumerate(self.single_type_managers):
+             if not manager.enable_caching:
+                 continue
+             manager.cache_blocks(
+                 request,
+                 self.get_num_cacheable_tokens(num_computed_tokens, group_id),
+                 retention_interval=self.retention_interval,
+-                replay_boundaries=boundaries,
++                replay_boundaries=(
++                    swa_boundaries
++                    if isinstance(manager.kv_cache_spec, SlidingWindowSpec)
++                    else boundaries
++                ),
+             )
+ 
+     def emit_cached_block_events(
+         self, request: Request, computed_blocks: tuple[list[KVCacheBlock], ...]

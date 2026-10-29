@@ -27,11 +27,24 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
-## Combined experiment C1
+## Combined experiment C1c
 
-C1 combines the stability and FP8 MoE components below on PR #62 source commit
-`21da126678a5e9fa4d37223516297f8a9bf627e0`. Component patch hashes and runtime
-controls are unchanged. It does not include the indexer-memory or int8 bundle.
+C1c retains all C1 stability and FP8 components, adding a bounded SWA checkpoint
+fallback for no-drop, single-lookahead speculative paths (including DSpark/DFlash).
+It keeps the latest semantic boundary and the preceding aligned boundary, so a
+nearby changed-question prefix can hit without losing the exact-resend benefit of
+#54163. EAGLE-drop paths, non-speculative paths and non-SWA groups are unchanged.
+This does not guarantee reuse for edits before both retained boundaries.
+
+The extra patch is `patches/dspark-swa-prefix-fallback-v032.patch`.
+No new runtime flag or periodic-retention override is baked in. CPU source tests
+cover 15,360 lookup cases, including every residue, exact/changed resends,
+short prompts, periodic/dense controls and a failing unmodified-policy control.
+GPU/host cache occupancy and end-to-end correctness still need qualification.
+
+The base remains PR #62 source `21da126678a5e9fa4d37223516297f8a9bf627e0`.
+Original component patch hashes and runtime controls are unchanged.
+This does not include the indexer-memory or int8 bundle.
 Build/CPU checks do not qualify the combined GPU runtime.
 
 ## Experimental stability bundle
