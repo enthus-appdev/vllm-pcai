@@ -357,12 +357,14 @@ COPY patches/62958-dspark-int8-v032.patch /tmp/dspark-int8.patch
 COPY native/dspark /tmp/dspark-build
 COPY diag/verify_dspark_int8_patch.py /tmp/verify_dspark_int8_patch.py
 RUN set -eux; \
-    test "$(sha256sum /tmp/dspark-int8.patch | cut -d' ' -f1)" = "f65c9778b10b16c90a5b75ac745143e5d7066e9365c3a20ddd472a46e709464a"; \
+    test "$(sha256sum /tmp/dspark-int8.patch | cut -d' ' -f1)" = "ffcfb0cc255452da8d5fe508efc08b1e7a4833820528a3cac2928c73e202e09a"; \
     echo 'f619e1943039a67a3254f7e0679e1f3e0faa9d8fccae795f3b20df9e91a8a429  /tmp/dspark-build/include/torch_utils.h' | sha256sum -c -; \
     echo '52cc0c3cd375d5cca437cbc011519814aefe5fe55eb9698147da50b7a19314c8  /tmp/dspark-build/include/core/registration.h' | sha256sum -c -; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    git -C "$SITE" apply --include='vllm/*' /tmp/dspark-int8.patch; \
-    git -C /tmp/dspark-build apply --include=csrc/dspark_markov_walk.cu /tmp/dspark-int8.patch; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/dspark-int8.patch; \
+    mkdir -p /tmp/dspark-build/csrc; \
+    mv "$SITE/csrc/dspark_markov_walk.cu" /tmp/dspark-build/csrc/; \
+    rmdir "$SITE/csrc" 2>/dev/null || true; \
     python3 /tmp/dspark-build/build_extension.py build_ext --build-lib /tmp/dspark-build/out --build-temp /tmp/dspark-build/objects; \
     SO="$(find /tmp/dspark-build/out -name 'pcai_dspark_markov_walk*.so' -print)"; \
     test -f "$SO"; \

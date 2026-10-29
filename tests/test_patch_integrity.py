@@ -93,7 +93,7 @@ class PatchIntegrityTests(unittest.TestCase):
 
     def test_pinned_dspark_int8_bundle(self):
         patch = ROOT / "patches/62958-dspark-int8-v032.patch"
-        digest = "f65c9778b10b16c90a5b75ac745143e5d7066e9365c3a20ddd472a46e709464a"
+        digest = "ffcfb0cc255452da8d5fe508efc08b1e7a4833820528a3cac2928c73e202e09a"
         self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
         paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
                  if line.startswith("diff --git ")}
@@ -107,6 +107,8 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
         self.assertIn("python3 /tmp/verify_dspark_int8_patch.py", dockerfile)
         self.assertIn("cuobjdump --list-elf", dockerfile)
+        self.assertIn('patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/dspark-int8.patch', dockerfile)
+        self.assertNotIn("apply --include=", dockerfile)
         builder = (ROOT / "native/dspark/build_extension.py").read_text()
         self.assertIn("compute_90a,code=sm_90a", builder)
         self.assertIn("0x020B000000000000ULL", builder)

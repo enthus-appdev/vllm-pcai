@@ -909,7 +909,8 @@ diff --git a/vllm/_custom_ops.py b/vllm/_custom_ops.py
 index e786207..0dd3118 100644
 --- a/vllm/_custom_ops.py
 +++ b/vllm/_custom_ops.py
-@@ -3308,6 +3308,51 @@ def dsv3_fused_a_gemm(
+@@ -3307,8 +3307,53 @@ def dsv3_fused_a_gemm(
+     """
      torch.ops._C.dsv3_fused_a_gemm(output, mat_a, mat_b, enable_pdl)
  
  
@@ -961,11 +962,13 @@ index e786207..0dd3118 100644
  def weight_packed_linear_cpu(
      x: torch.Tensor,
      packed_weight: torch.Tensor,
+     n: int,
 diff --git a/vllm/config/speculative.py b/vllm/config/speculative.py
 index ec30bcb..ea2df3c 100644
 --- a/vllm/config/speculative.py
 +++ b/vllm/config/speculative.py
-@@ -609,6 +609,11 @@ class SpeculativeConfig:
+@@ -608,8 +608,13 @@ class SpeculativeConfig:
+     dspark_draft_topk: int | None = Field(default=None, ge=1)
      """For Qwen3 DSpark drafting, evaluate the Markov projection only for the
      top-k base-logit candidates. Requires draft tensor parallel size 1."""
  
@@ -977,7 +980,9 @@ index ec30bcb..ea2df3c 100644
      def compute_hash(self) -> str:
          """WARNING: Whenever a new field is added to this config,
          ensure that it is included in the factors list if
-@@ -1842,6 +1847,17 @@ class SpeculativeConfig:
+         it affects the computation graph.
+@@ -1841,8 +1846,19 @@ class SpeculativeConfig:
+                 "speculative model unless the draft model config contains an "
                  "n_predict parameter."
              )
  
@@ -995,6 +1000,7 @@ index ec30bcb..ea2df3c 100644
          if self.num_speculative_tokens <= 0:
              raise ValueError(
                  "Expected num_speculative_tokens to be greater "
+                 f"than zero ({self.num_speculative_tokens})."
 diff --git a/vllm/v1/worker/gpu/spec_decode/dspark/markov_walk.py b/vllm/v1/worker/gpu/spec_decode/dspark/markov_walk.py
 new file mode 100644
 index 0000000..384cf23
@@ -1281,7 +1287,8 @@ diff --git a/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py b/vllm/v1/worke
 index 02dd336..b82351e 100644
 --- a/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py
 +++ b/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py
-@@ -32,6 +32,7 @@ from vllm.config.compilation import CUDAGraphMode
+@@ -31,8 +31,9 @@ from vllm.config import VllmConfig
+ from vllm.config.compilation import CUDAGraphMode
  from vllm.logger import init_logger
  from vllm.v1.worker.gpu.sample.gumbel import gumbel_sample
  from vllm.v1.worker.gpu.spec_decode.dflash.speculator import DFlashSpeculator
@@ -1289,7 +1296,9 @@ index 02dd336..b82351e 100644
  from vllm.v1.worker.gpu.spec_decode.dspark.utils import load_dspark_model
  
  logger = init_logger(__name__)
-@@ -80,6 +81,8 @@ class DSparkSpeculator(DFlashSpeculator):
+ 
+@@ -79,8 +80,10 @@ class DSparkSpeculator(DFlashSpeculator):
+             self.draft_model_config.hf_config, "dspark_draft_topk", None
          )
  
          self.use_confidence_head: bool = False
@@ -1298,7 +1307,9 @@ index 02dd336..b82351e 100644
  
      def load_draft_model(
          self,
-@@ -111,8 +114,38 @@ class DSparkSpeculator(DFlashSpeculator):
+         target_model: torch.nn.Module,
+@@ -110,10 +113,40 @@ class DSparkSpeculator(DFlashSpeculator):
+         if self.use_confidence_head:
              # The acceptance estimator is not needed when a trained confidence head
              # is available.
              self.use_acceptance_estimator = False
@@ -1337,7 +1348,9 @@ index 02dd336..b82351e 100644
      def _sample_logits(
          self,
          logits: torch.Tensor,
-@@ -168,6 +201,12 @@ class DSparkSpeculator(DFlashSpeculator):
+         idx_map: torch.Tensor,
+@@ -167,8 +200,14 @@ class DSparkSpeculator(DFlashSpeculator):
+         base_logits = self.model.compute_draft_logits(sample_hidden)
          vocab_size = base_logits.shape[-1]
          base_logits = base_logits.view(num_reqs, n_spec, vocab_size)
  
@@ -1350,7 +1363,9 @@ index 02dd336..b82351e 100644
          idx_map = self.sample_idx_mapping[:num_sample].view(num_reqs, n_spec)
          sample_pos = self.sample_pos[:num_sample].view(num_reqs, n_spec)
          confidence_markov_embeds = []
-@@ -198,5 +237,44 @@ class DSparkSpeculator(DFlashSpeculator):
+ 
+@@ -197,8 +236,47 @@ class DSparkSpeculator(DFlashSpeculator):
+             self.draft_token_confidence_probs[:num_reqs] = confidence.view(
                  num_reqs, n_spec
              )
  
@@ -1395,3 +1410,5 @@ index 02dd336..b82351e 100644
 +
      def _sample_sequential_topk(self, num_reqs: int, head_hidden: torch.Tensor) -> None:
          """Apply the sequential Markov head only to top-k base-logit candidates.
+ 
+         Candidate selection is done once for all draft positions. At each
