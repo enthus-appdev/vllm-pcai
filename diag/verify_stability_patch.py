@@ -17,7 +17,8 @@ def verify(root):
     root = pathlib.Path(root)
     config = (root / "config/speculative.py").read_text()
     methods = {}
-    for name in ("use_eagle", "use_dflash", "use_dspark", "needs_eagle_block_drop", "use_eagle_block_drop"):
+    assert "def needs_eagle_block_drop(" not in config, "#54163 must be absent"
+    for name in ("use_eagle", "use_dflash", "use_dspark", "use_eagle_block_drop"):
         load_function(config, name, methods)
     Config = type("Config", (), {k: v for k, v in methods.items() if callable(v)})
     for method in ("eagle", "eagle3", "mtp", "dflash", "dspark", "ngram"):
@@ -25,7 +26,7 @@ def verify(root):
             c = Config()
             c.method, c.disable_eagle_block_drop = method, disabled
             assert c.use_eagle() == (method != "ngram"), method
-            assert c.use_eagle_block_drop() == (method in ("eagle", "eagle3", "mtp") and not disabled), method
+            assert c.use_eagle_block_drop() == (method != "ngram" and not disabled), method
     assert "self.draft_model_config.model_weights = (" in config, "#48023 removed"
     assert "self.target_model_config.model_weights" in config
 
@@ -86,7 +87,7 @@ def verify(root):
                and any(isinstance(x, ast.Continue) for x in n.body)
                and "skip_request(request_queue)" in ast.unparse(n) for n in ast.walk(tree)), "encoder stall must requeue"
     assert "min(num_new_tokens, start_pos - num_computed_tokens)" in ast.unparse(tree), "lookahead cap regressed"
-    assert "speculative_config.needs_eagle_block_drop()" in ast.unparse(tree)
+    assert "if self.use_eagle and (not self.use_eagle_block_drop):" in ast.unparse(tree)
     print("stability backports: CPU predicates, nested ownership and encoder boundaries OK")
 
 

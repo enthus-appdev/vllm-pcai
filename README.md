@@ -27,22 +27,23 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
-## Combined experiment C1
+## Combined experiment C1b
 
-C1 combines the stability and FP8 MoE components below on PR #62 source commit
-`21da126678a5e9fa4d37223516297f8a9bf627e0`. Component patch hashes and runtime
-controls are unchanged. It does not include the indexer-memory or int8 bundle.
+C1b removes #54163 from C1 while retaining #63427, #60553, #59030 and FP8 MoE.
+DSpark/DFlash use the baseline trailing-block-drop policy. This is a rollback
+control for sparse-retention prefix misses, not a claim of GPU qualification.
+The original base remains PR #62 source commit
+`21da126678a5e9fa4d37223516297f8a9bf627e0`. The reduced stability bundle has a new hash; FP8 controls are unchanged. It does not include the indexer-memory or int8 bundle.
 Build/CPU checks do not qualify the combined GPU runtime.
 
 ## Experimental stability bundle
 
 The stability component adds the following bundle:
 - [#63427](https://github.com/vllm-project/vllm/pull/63427), head `6ee3f40d6137b487617e2ab1e5ff1a13402a0cda`: recursively weak-reference nested graph outputs.
-- [#54163](https://github.com/vllm-project/vllm/pull/54163), head `3088df4c8770f859e23de3326d0c6dc8ce37f1a7`: preserve DFlash/DSpark's trailing prefix block. Config context is adapted to v0.32.0 (without newer XPRESS code); broad EAGLE lookahead and #48023 remain intact.
 - [#60553](https://github.com/vllm-project/vllm/pull/60553), head `5a675fa4d91def4031bc19e5d9bb016a69494d2d`: encoder-cache progress at adjacent-image/lookahead boundaries.
 - [#59030](https://github.com/vllm-project/vllm/pull/59030), head `54e0b57e7c95f48d04f0d365cb2da0cc126071da`: requeue encoder-stalled waiting requests.
 
-The production-only bundle is pinned in `patches/vision-stability-v032.patch`.
+The production-only bundle is pinned in `patches/vision-stability-no54163-v032.patch`.
 No extra runtime flag is needed. The CPU tripwire executes isolated source predicates,
 nested-reference behavior with stand-ins, and encoder reclamation boundaries; it does
 not qualify actual CUDA graph lifetimes, multi-image scheduling or GPU outputs.

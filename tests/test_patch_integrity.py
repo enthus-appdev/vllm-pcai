@@ -92,12 +92,12 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn("python3 /tmp/verify_swa_admission_patch.py", dockerfile)
 
     def test_pinned_stability_bundle(self):
-        patch = ROOT / "patches/vision-stability-v032.patch"
-        digest = "185ef3b32eab7aefab857e81de107b5714ed94525df654712e1616753f2b7668"
+        patch = ROOT / "patches/vision-stability-no54163-v032.patch"
+        digest = "a25ebfb21fbc8f688146d05cda516dbf641e563a6b202191435f0c2e210ce4a6"
         self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
         paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
                  if line.startswith("diff --git ")}
-        self.assertEqual(paths, {"vllm/config/speculative.py", "vllm/utils/torch_utils.py",
+        self.assertEqual(paths, {"vllm/utils/torch_utils.py",
                                  "vllm/v1/core/sched/scheduler.py"})
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn(digest, dockerfile)
