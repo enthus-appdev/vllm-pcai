@@ -349,3 +349,50 @@ RUN set -eux; \
     cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
     python3 /tmp/verify_embed_offload_plugin.py "$VLLM_DIR"; \
     rm -rf /tmp/pcai_embed_offload /tmp/verify_embed_offload_plugin.py
+
+# Stability bundle on v0.32.0: #63427 (6ee3f40), #54163 (3088df4),
+# #60553 (5a675fa), #59030 (54e0b57). Only #54163 config context is adapted.
+# Preserve broad EAGLE lookahead and the existing model_weights inheritance.
+COPY patches/vision-stability-v032.patch /tmp/stability.patch
+COPY diag/verify_stability_patch.py /tmp/verify_stability_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/stability.patch | cut -d' ' -f1)" = "185ef3b32eab7aefab857e81de107b5714ed94525df654712e1616753f2b7668"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/stability.patch; \
+    else patch -p1 -d "$SITE" < /tmp/stability.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_stability_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/stability.patch /tmp/verify_stability_patch.py
+
+# #62751 da37621 + #61875 1ef812f + #62816 b6e146e, production code only.
+# Upgrade only Humming; keep the base Torch/CUDA dependencies unchanged.
+# PyPI manylinux x86_64 cp310-abi3 wheel, pinned by hash; no source build fallback.
+# Ignore inherited UV_OVERRIDE only for this no-deps install: its unrelated,
+# unhashed NCCL constraint conflicts with --require-hashes. Installed NCCL stays put.
+RUN set -eux; \
+    printf '%s\n' 'humming-kernels[cu13]==0.1.18 --hash=sha256:3eee5f7365457708a8962c852a4c797d99439a450dfe16fee47cc39664d080d4' > /tmp/humming-requirement.txt; \
+    if command -v uv >/dev/null 2>&1; then env -u UV_OVERRIDE uv pip install --system --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; \
+    else python3 -m pip install --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; fi; \
+    rm -f /tmp/humming-requirement.txt
+
+COPY patches/vision-fp8-moe-v032.patch /tmp/fp8-moe.patch
+COPY diag/verify_fp8_moe_patch.py /tmp/verify_fp8_moe_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/fp8-moe.patch | cut -d' ' -f1)" = "ffa8397c9ddea324e74f4ef259d3d799a5425eca69f56e08a8125683cdbe31d2"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/fp8-moe.patch; \
+    else patch -p1 -d "$SITE" < /tmp/fp8-moe.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_fp8_moe_patch.py "$VLLM_DIR" --installed; \
+    rm -f /tmp/fp8-moe.patch /tmp/verify_fp8_moe_patch.py
+
+# C1c: retain one earlier semantic SWA boundary without restoring block dropping.
+COPY patches/dspark-swa-prefix-fallback-v032.patch /tmp/prefix-fallback.patch
+COPY diag/verify_prefix_retention_patch.py /tmp/verify_prefix_retention_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/prefix-fallback.patch | cut -d' ' -f1)" = "9972e18b4d70b152a812ec44f1cf7244a5698f0c8f1829c03423342442ca23dd"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_prefix_retention_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/prefix-fallback.patch /tmp/verify_prefix_retention_patch.py

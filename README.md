@@ -27,6 +27,67 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
+## Combined experiment C1c
+
+C1c retains all C1 stability and FP8 components, adding a bounded SWA checkpoint
+fallback for no-drop, single-lookahead speculative paths (including DSpark/DFlash).
+It keeps the latest semantic boundary and the preceding aligned boundary, so a
+nearby changed-question prefix can hit without losing the exact-resend benefit of
+#54163. EAGLE-drop paths, non-speculative paths and non-SWA groups are unchanged.
+This does not guarantee reuse for edits before both retained boundaries.
+
+The extra patch is `patches/dspark-swa-prefix-fallback-v032.patch`.
+No new runtime flag or periodic-retention override is baked in. CPU source tests
+cover 15,360 lookup cases, including every residue, exact/changed resends,
+short prompts, periodic/dense controls and a failing unmodified-policy control.
+GPU/host cache occupancy and end-to-end correctness still need qualification.
+
+The base remains PR #62 source `21da126678a5e9fa4d37223516297f8a9bf627e0`.
+Original component patch hashes and runtime controls are unchanged.
+This does not include the indexer-memory or int8 bundle.
+Build/CPU checks do not qualify the combined GPU runtime.
+
+## Experimental stability bundle
+
+The stability component adds the following bundle:
+- [#63427](https://github.com/vllm-project/vllm/pull/63427), head `6ee3f40d6137b487617e2ab1e5ff1a13402a0cda`: recursively weak-reference nested graph outputs.
+- [#54163](https://github.com/vllm-project/vllm/pull/54163), head `3088df4c8770f859e23de3326d0c6dc8ce37f1a7`: preserve DFlash/DSpark's trailing prefix block. Config context is adapted to v0.32.0 (without newer XPRESS code); broad EAGLE lookahead and #48023 remain intact.
+- [#60553](https://github.com/vllm-project/vllm/pull/60553), head `5a675fa4d91def4031bc19e5d9bb016a69494d2d`: encoder-cache progress at adjacent-image/lookahead boundaries.
+- [#59030](https://github.com/vllm-project/vllm/pull/59030), head `54e0b57e7c95f48d04f0d365cb2da0cc126071da`: requeue encoder-stalled waiting requests.
+
+The production-only bundle is pinned in `patches/vision-stability-v032.patch`.
+No extra runtime flag is needed. The CPU tripwire executes isolated source predicates,
+nested-reference behavior with stand-ins, and encoder reclamation boundaries; it does
+not qualify actual CUDA graph lifetimes, multi-image scheduling or GPU outputs.
+Run `python3 -m unittest discover -s tests -v` for local integrity checks.
+
+## Experimental Hopper FP8 MoE activation image
+
+The FP8 activation component contains:
+- [#62751](https://github.com/vllm-project/vllm/pull/62751), head `da3762163f542e5ca347dc358d976c86a795b1dc`: shared Humming activation-schema resolution.
+- [#61875](https://github.com/vllm-project/vllm/pull/61875), head `1ef812f7be96f5ce000fb002e8c8edc74e122cb1`: DeepSeek V4/V4.1 checkpoint MXFP8 resolves to **block FP8 group128 on SM90** by default.
+- [#62816](https://github.com/vllm-project/vllm/pull/62816), head `b6e146e7f32597af02621c5576fffcfcee497a28`: Humming **0.1.18** and removal of the obsolete DeviceInfo workaround.
+
+Production hunks are unchanged; the requirements-file bump is implemented as a
+hash-pinned x86_64 wheel installation with `--no-deps`, preserving the base Torch
+and CUDA dependency set. The bundle is `patches/vision-fp8-moe-v032.patch`.
+
+**FP8 test:** select `--moe-backend humming`, leave
+`VLLM_HUMMING_INPUT_QUANT_CONFIG` unset, and do not set
+`--quantization-config.moe.activation mxfp8` (an explicit override requests
+group32 instead). Expect the log:
+`Running checkpoint MXFP8 MoE activations as block FP8 (group 128) on Hopper.`
+
+**Same-image BF16 control:** set
+`VLLM_HUMMING_INPUT_QUANT_CONFIG='{"allow_fallback": true}'`, as in the upstream
+A/B. This image changes Humming as well as the activation policy; comparison
+against a prior image alone does not isolate the dependency upgrade.
+
+CPU tripwires check default/override resolution with stand-ins, model declaration,
+installed package version and base Torch version. They do not execute Humming
+kernels or qualify numerical accuracy, graph compilation or performance.
+Run `python3 -m unittest discover -s tests -v` locally.
+
 ## Base image: `v0.32.0`
 
 The `FROM` uses the **[v0.32.0 release](https://github.com/vllm-project/vllm/releases/tag/v0.32.0)**. This retains the ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, packed heterogeneous-KV support, and OffloadingConnector bounds fix ([#52923](https://github.com/vllm-project/vllm/pull/52923)). It also updates Hopper's quantization backend selection; performance still requires workload-specific GPU validation. Building or publishing this image does not redeploy an existing model service.
