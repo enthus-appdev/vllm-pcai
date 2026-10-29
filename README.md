@@ -27,6 +27,31 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
+## Experimental indexer-memory image
+
+This branch adds only the shared indexer-memory bundle to image PR #62:
+- [#63047](https://github.com/vllm-project/vllm/pull/63047), head `4f96a21bb5126dc930d6eaec424100cf1e748418`: decode-only expanded block tables are bounded by decode rows; previous prefill logits are released after their last consumer. **No V4.1/Engram model changes.**
+- [#58068](https://github.com/vllm-project/vllm/pull/58068), head `1631c22e88f5f08e7977b69863a1c85fb9efb479`, using image PR #55's v0.32 adaptation at `b8a6fc992c0fa8bb4a9ab388e537a4bea1ece7b2`: fixed-width prefill allocation and matching subchunk budgets.
+- [#62860](https://github.com/vllm-project/vllm/pull/62860) prerequisite: adapted **SM90 FP32** decode-logits profiling before KV sizing. Newer SM100 BF16/copy handling is deliberately excluded because this base does not contain that dispatch.
+
+The single patch is `patches/vision-indexer-memory-v032.patch`. The metadata hunk
+from #63047 applies unchanged; its lifetime hunk is rebased after fixed-width
+view creation and after DCP merging. The profiler reserves the larger of the
+prefill budget and padded SM90 decode logits, so safer sizing can reduce reported
+KV capacity rather than always increasing it.
+
+**This image defaults `VLLM_SPARSE_INDEXER_FIXED_LOGITS_WIDTH=1`.** No extra flag
+is needed. Set it to `0` for a same-image comparison without fixed-width logits;
+the table/lifetime/profiling fixes remain active. Fixed width can increase
+early-context allocation and subchunk count, so memory and throughput require
+measurement. DCP retains the upstream guard disabling fixed width.
+
+CPU tripwires cover env selection, DCP guard, chunk budgets, DeepGEMM argument
+forwarding, decode table bounds, profile arithmetic and final-use deletion.
+There is no GPU/OOM/accuracy qualification. The existing DeepGEMM
+`max_seqlen_k` API is reused; no native extension rebuild or new dependency.
+Run `python3 -m unittest discover -s tests -v` locally.
+
 ## Base image: `v0.32.0`
 
 The `FROM` uses the **[v0.32.0 release](https://github.com/vllm-project/vllm/releases/tag/v0.32.0)**. This retains the ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, packed heterogeneous-KV support, and OffloadingConnector bounds fix ([#52923](https://github.com/vllm-project/vllm/pull/52923)). It also updates Hopper's quantization backend selection; performance still requires workload-specific GPU validation. Building or publishing this image does not redeploy an existing model service.

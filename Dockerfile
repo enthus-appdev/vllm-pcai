@@ -349,3 +349,19 @@ RUN set -eux; \
     cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
     python3 /tmp/verify_embed_offload_plugin.py "$VLLM_DIR"; \
     rm -rf /tmp/pcai_embed_offload /tmp/verify_embed_offload_plugin.py
+
+# Shared #63047 subset (4f96a21) + reconciled #58068 via image PR55 b8a6fc9.
+# #62860's SM90 profile accounting is adapted to this base's FP32-only dispatch.
+# Fixed-width allocation is enabled in this experimental image; set 0 to compare.
+ENV VLLM_SPARSE_INDEXER_FIXED_LOGITS_WIDTH=1
+COPY patches/vision-indexer-memory-v032.patch /tmp/indexer-memory.patch
+COPY diag/verify_fixed_width_logits_patch.py /tmp/verify_fixed_width_logits_patch.py
+COPY diag/verify_indexer_memory_patch.py /tmp/verify_indexer_memory_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/indexer-memory.patch | cut -d' ' -f1)" = "1fe6a6db9bf855caa3e27c8f67f829b49e203bf6c9b7995a79ebc45885feff36"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/indexer-memory.patch; \
+    else patch -p1 -d "$SITE" < /tmp/indexer-memory.patch; fi; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_indexer_memory_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/indexer-memory.patch /tmp/verify_indexer_memory_patch.py /tmp/verify_fixed_width_logits_patch.py
