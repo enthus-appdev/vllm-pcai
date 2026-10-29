@@ -121,6 +121,19 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn("--no-deps --only-binary=:all: --require-hashes", dockerfile)
         self.assertIn("3eee5f7365457708a8962c852a4c797d99439a450dfe16fee47cc39664d080d4", dockerfile)
 
+    def test_pinned_prefix_retention_fallback(self):
+        patch = ROOT / "patches/dspark-swa-prefix-fallback-v032.patch"
+        digest = "9972e18b4d70b152a812ec44f1cf7244a5698f0c8f1829c03423342442ca23dd"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
+        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
+                 if line.startswith("diff --git ")}
+        self.assertEqual(paths, {"vllm/v1/core/kv_cache_coordinator.py"})
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn(digest, dockerfile)
+        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
+        self.assertIn("python3 /tmp/verify_prefix_retention_patch.py", dockerfile)
+        self.assertNotIn("ENV VLLM_PREFIX_CACHE_RETENTION", dockerfile)
+
     def test_git_can_parse_every_patch(self):
         patches = sorted((ROOT / "patches").glob("*.patch"))
         self.assertTrue(patches, "No vendored patches found")

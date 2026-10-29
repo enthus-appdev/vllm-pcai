@@ -385,3 +385,14 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     python3 /tmp/verify_fp8_moe_patch.py "$VLLM_DIR" --installed; \
     rm -f /tmp/fp8-moe.patch /tmp/verify_fp8_moe_patch.py
+
+# C1c: retain one earlier semantic SWA boundary without restoring block dropping.
+COPY patches/dspark-swa-prefix-fallback-v032.patch /tmp/prefix-fallback.patch
+COPY diag/verify_prefix_retention_patch.py /tmp/verify_prefix_retention_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/prefix-fallback.patch | cut -d' ' -f1)" = "9972e18b4d70b152a812ec44f1cf7244a5698f0c8f1829c03423342442ca23dd"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_prefix_retention_patch.py "$VLLM_DIR"; \
+    rm -f /tmp/prefix-fallback.patch /tmp/verify_prefix_retention_patch.py
