@@ -27,9 +27,16 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
+## Combined experiment C1
+
+C1 combines the stability and FP8 MoE components below on PR #62 source commit
+`21da126678a5e9fa4d37223516297f8a9bf627e0`. Component patch hashes and runtime
+controls are unchanged. It does not include the indexer-memory or int8 bundle.
+Build/CPU checks do not qualify the combined GPU runtime.
+
 ## Experimental stability bundle
 
-This branch adds only the following bundle to image PR #62's source baseline:
+The stability component adds the following bundle:
 - [#63427](https://github.com/vllm-project/vllm/pull/63427), head `6ee3f40d6137b487617e2ab1e5ff1a13402a0cda`: recursively weak-reference nested graph outputs.
 - [#54163](https://github.com/vllm-project/vllm/pull/54163), head `3088df4c8770f859e23de3326d0c6dc8ce37f1a7`: preserve DFlash/DSpark's trailing prefix block. Config context is adapted to v0.32.0 (without newer XPRESS code); broad EAGLE lookahead and #48023 remain intact.
 - [#60553](https://github.com/vllm-project/vllm/pull/60553), head `5a675fa4d91def4031bc19e5d9bb016a69494d2d`: encoder-cache progress at adjacent-image/lookahead boundaries.
@@ -43,7 +50,7 @@ Run `python3 -m unittest discover -s tests -v` for local integrity checks.
 
 ## Experimental Hopper FP8 MoE activation image
 
-This branch adds only the FP8 activation bundle to image PR #62's source baseline:
+The FP8 activation component contains:
 - [#62751](https://github.com/vllm-project/vllm/pull/62751), head `da3762163f542e5ca347dc358d976c86a795b1dc`: shared Humming activation-schema resolution.
 - [#61875](https://github.com/vllm-project/vllm/pull/61875), head `1ef812f7be96f5ce000fb002e8c8edc74e122cb1`: DeepSeek V4/V4.1 checkpoint MXFP8 resolves to **block FP8 group128 on SM90** by default.
 - [#62816](https://github.com/vllm-project/vllm/pull/62816), head `b6e146e7f32597af02621c5576fffcfcee497a28`: Humming **0.1.18** and removal of the obsolete DeviceInfo workaround.
