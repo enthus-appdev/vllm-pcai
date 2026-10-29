@@ -55,32 +55,23 @@ The fixture graph mocks vLLM and tests both TP head partitions, inactive/padded
 heads, capacity errors and fail-closed graph settings. They do not execute
 multi-GPU collectives or the full model.
 
-## Next test phase
+## Status (2026-10-28)
 
-`gpu_qualification.py` is a bounded synthetic two-H100/TP2 smoke, not a model
-load or serving endpoint. Run it only in an explicitly approved one-shot Job
-with a small disk `/fixtures` volume, a timeout and no retries. It compares K2/K3
-native GEMV with a dequantized reference and disk Engram with the stock CUDA
-lookup, including real vLLM TP gathering. A pass does not qualify full-model
-loading, cooperative expert kernels, UVA placement, quality or performance.
+Qualified on two H100 NVL (TP2) with the published image
+`ghcr.io/enthus-appdev/vllm-pcai@sha256:0f7f625b259d50d3a071f7aaee3aa51eae1658fa023eabadb7836ce4ccc8050a`:
 
-The companion `chart-support.patch` contains the generic inference chart with
-configurable engine, model storage, optional selected-file disk staging, resources
-and access. Its defaults select the current EAQ profile and start one real serving
-replica; no override file is required. It contains no test mode or qualification
-Jobs. Tests run independently in the agent's bounded harness. Source and destination
-staging files are hash-checked before serving begins.
+- Synthetic TP2 test: K2/K3 GEMV within 5.4e-4 of a dequantized reference; disk Engram rows bit-identical
+  to vLLM's CUDA lookup on both ranks, including padded heads.
+- Dense EXL3 reconstruction against the original weights: relative error 2.1% (6-bit) to 7.3% (4-bit),
+  cosine >= 0.997.
+- `exl3_moe` / `exl3_moe_mixedk` read pinned-host (UVA) trellises correctly.
+- Full model, eager, 8K context, one request, routed experts in pinned host RAM (183 GiB): loads in
+  about 14 minutes, answers correctly, **decode about 12 tok/s**, prefill about 140 tok/s. The bound is
+  PCIe: every token reads its experts from host memory.
 
-## Release gates
+Not covered: long context, concurrency, CUDA graphs, DSpark, systematic quality, partial expert placement
+on the GPUs. This build is experimental and is never published under the production tags.
 
-1. Native sm_90 extensions compile and import without replacing the base torch.
-2. Audit the pinned fork's Hopper synchronization behaviour; small GPU kernels
-   must finish under a timeout and match a dequantized reference for K2 and K3.
-3. Verify both TP ranks' selected Engram bytes/scales and numerical results against
-   the stock CUDA lookup, including padding and DEAD_ID.
-4. Audit all real EAQ dense/BF16/expert key/shape mappings and UVA placement.
-5. Only then publish the candidate digest and finalize attended test values.
-
-No inference deployment or rollback is performed by the build/tests. The attended
-boot uses C1/8K/512 prefill, no DSpark, no vision, no async scheduling or RAM KV tier.
-Do not raise the memory limit on failure or leave Deployment restart loops running.
+Test Jobs are bounded, one-shot and run outside any chart: `gpu_qualification.py` (synthetic TP2),
+`verify_dense.py` (dense reconstruction vs original weights) and `moe_uva_probe.py` (MoE kernels with
+host-resident experts).
