@@ -27,11 +27,11 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
-## Combined experiment C1
+## Combined experiment C2
 
-C1 combines the stability and FP8 MoE components below on PR #62 source commit
-`21da126678a5e9fa4d37223516297f8a9bf627e0`. Component patch hashes and runtime
-controls are unchanged. It does not include the indexer-memory or int8 bundle.
+C2 adds the indexer-memory component to C1 (stability + FP8 MoE), on PR #62
+source commit `21da126678a5e9fa4d37223516297f8a9bf627e0`. Component patch hashes
+and runtime controls are unchanged. It does not include the int8 bundle.
 Build/CPU checks do not qualify the combined GPU runtime.
 
 ## Experimental stability bundle
@@ -76,7 +76,7 @@ kernels or qualify numerical accuracy, graph compilation or performance.
 
 ## Experimental indexer-memory image
 
-This branch adds only the shared indexer-memory bundle to image PR #62:
+The shared indexer-memory component contains:
 - [#63047](https://github.com/vllm-project/vllm/pull/63047), head `4f96a21bb5126dc930d6eaec424100cf1e748418`: decode-only expanded block tables are bounded by decode rows; previous prefill logits are released after their last consumer. **No V4.1/Engram model changes.**
 - [#58068](https://github.com/vllm-project/vllm/pull/58068), head `1631c22e88f5f08e7977b69863a1c85fb9efb479`, using image PR #55's v0.32 adaptation at `b8a6fc992c0fa8bb4a9ab388e537a4bea1ece7b2`: fixed-width prefill allocation and matching subchunk budgets.
 - [#62860](https://github.com/vllm-project/vllm/pull/62860) prerequisite: adapted **SM90 FP32** decode-logits profiling before KV sizing. Newer SM100 BF16/copy handling is deliberately excluded because this base does not contain that dispatch.
