@@ -385,3 +385,28 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     python3 /tmp/verify_fp8_moe_patch.py "$VLLM_DIR" --installed; \
     rm -f /tmp/fp8-moe.patch /tmp/verify_fp8_moe_patch.py
+
+# #62958 head 19af173d3af78533964e380242eb849aef94d16a.
+# Compile only the added operator against the base Torch/CUDA toolchain.
+# Keep the stock vLLM extension; config context and standalone loading are adapted.
+COPY patches/62958-dspark-int8-v032.patch /tmp/dspark-int8.patch
+COPY native/dspark /tmp/dspark-build
+COPY diag/verify_dspark_int8_patch.py /tmp/verify_dspark_int8_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/dspark-int8.patch | cut -d' ' -f1)" = "ffcfb0cc255452da8d5fe508efc08b1e7a4833820528a3cac2928c73e202e09a"; \
+    echo 'f619e1943039a67a3254f7e0679e1f3e0faa9d8fccae795f3b20df9e91a8a429  /tmp/dspark-build/include/torch_utils.h' | sha256sum -c -; \
+    echo '52cc0c3cd375d5cca437cbc011519814aefe5fe55eb9698147da50b7a19314c8  /tmp/dspark-build/include/core/registration.h' | sha256sum -c -; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/dspark-int8.patch; \
+    mkdir -p /tmp/dspark-build/csrc; \
+    mv "$SITE/csrc/dspark_markov_walk.cu" /tmp/dspark-build/csrc/; \
+    rmdir "$SITE/csrc" 2>/dev/null || true; \
+    python3 /tmp/dspark-build/build_extension.py build_ext --build-lib /tmp/dspark-build/out --build-temp /tmp/dspark-build/objects; \
+    SO="$(find /tmp/dspark-build/out -name 'pcai_dspark_markov_walk*.so' -print)"; \
+    test -f "$SO"; \
+    cuobjdump --list-elf "$SO" | tee /tmp/dspark-cubins.txt; \
+    grep 'sm_90' /tmp/dspark-cubins.txt; \
+    cp "$SO" "$VLLM_DIR/v1/worker/gpu/spec_decode/dspark/pcai_dspark_markov_walk.so"; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_dspark_int8_patch.py "$VLLM_DIR" --installed; \
+    rm -rf /tmp/dspark-build /tmp/dspark-int8.patch /tmp/verify_dspark_int8_patch.py /tmp/dspark-cubins.txt

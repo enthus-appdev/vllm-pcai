@@ -27,11 +27,11 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
-## Combined experiment C1
+## Combined experiment C3
 
-C1 combines the stability and FP8 MoE components below on PR #62 source commit
-`21da126678a5e9fa4d37223516297f8a9bf627e0`. Component patch hashes and runtime
-controls are unchanged. It does not include the indexer-memory or int8 bundle.
+C3 adds the DSpark int8 component to C1 (stability + FP8 MoE), on PR #62 source
+commit `21da126678a5e9fa4d37223516297f8a9bf627e0`. Component patch hashes and
+runtime controls are unchanged. It does not include the indexer-memory bundle.
 Build/CPU checks do not qualify the combined GPU runtime.
 
 ## Experimental stability bundle
@@ -73,6 +73,37 @@ against a prior image alone does not isolate the dependency upgrade.
 CPU tripwires check default/override resolution with stand-ins, model declaration,
 installed package version and base Torch version. They do not execute Humming
 kernels or qualify numerical accuracy, graph compilation or performance.
+
+## Experimental DSpark int8 Markov walk
+
+The int8 component adds [#62958](https://github.com/vllm-project/vllm/pull/62958),
+head `19af173d3af78533964e380242eb849aef94d16a`.
+The pinned patch includes the upstream CUDA kernel unchanged (including its
+MIT attribution), Python integration and the config-field adaptation for v0.32.0.
+
+Instead of rebuilding/replacing all vLLM CUDA operators, `native/dspark/`
+compiles that one operator for **sm_90a** against the base image's existing
+Torch/CUDA toolchain. Its schema is copied from the upstream binding hunk;
+`torch_utils.h` and `core/registration.h` are hash-pinned copies from upstream
+v0.32.0 commit `5df63a7203cdb9328d824a27b682e77c7b9928be`. The added shared
+library is loaded by the Markov helper. No dependency or base-kernel upgrade.
+
+**Opt in:** add `"dspark_markov_quantization":"int8"` to the existing
+`--speculative-config` object (with `"method":"dspark"`).
+Omitting the key preserves the original path. No environment variable is needed.
+
+The upstream guards require SM90, a full-vocabulary unquantized rank256 Markov
+head and at most16 draft steps, with vocabulary capacity depending on SM count.
+Batches above64 use the eager loop. Draft top-k, watermarking, logit soft caps
+and an online acceptance estimator are unsupported. Additional packed layouts
+consume GPU memory; the target still verifies the drafts, but acceptance and
+numerical behavior must be measured. Do not extrapolate Qwen benchmark gains
+to other models.
+
+CPU checks validate config rejection and shape selection; the image build also
+checks a native Hopper cubin and CUDA dispatcher registration without launching
+a kernel. These are **not** GPU execution, cooperative-launch, graph-replay,
+acceptance or quality qualification.
 Run `python3 -m unittest discover -s tests -v` locally.
 
 ## Base image: `v0.32.0`
