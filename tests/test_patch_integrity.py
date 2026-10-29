@@ -91,6 +91,32 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
         self.assertIn("python3 /tmp/verify_swa_admission_patch.py", dockerfile)
 
+    def test_pinned_dspark_int8_bundle(self):
+        patch = ROOT / "patches/62958-dspark-int8-v032.patch"
+        digest = "f65c9778b10b16c90a5b75ac745143e5d7066e9365c3a20ddd472a46e709464a"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
+        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
+                 if line.startswith("diff --git ")}
+        self.assertEqual(paths, {"csrc/dspark_markov_walk.cu", "vllm/_custom_ops.py",
+                                 "vllm/config/speculative.py",
+                                 "vllm/v1/worker/gpu/spec_decode/dspark/markov_walk.py",
+                                 "vllm/v1/worker/gpu/spec_decode/dspark/speculator.py"})
+        self.assertIn("Copyright (c) 2026 tie-pilot-qxw", patch.read_text())
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn(digest, dockerfile)
+        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
+        self.assertIn("python3 /tmp/verify_dspark_int8_patch.py", dockerfile)
+        self.assertIn("cuobjdump --list-elf", dockerfile)
+        builder = (ROOT / "native/dspark/build_extension.py").read_text()
+        self.assertIn("compute_90a,code=sm_90a", builder)
+        self.assertIn("0x020B000000000000ULL", builder)
+        for path, expected in (
+            ("torch_utils.h", "f619e1943039a67a3254f7e0679e1f3e0faa9d8fccae795f3b20df9e91a8a429"),
+            ("core/registration.h", "52cc0c3cd375d5cca437cbc011519814aefe5fe55eb9698147da50b7a19314c8"),
+        ):
+            self.assertEqual(hashlib.sha256((ROOT / "native/dspark/include" / path).read_bytes()).hexdigest(), expected)
+            self.assertIn(expected, dockerfile)
+
     def test_git_can_parse_every_patch(self):
         patches = sorted((ROOT / "patches").glob("*.patch"))
         self.assertTrue(patches, "No vendored patches found")

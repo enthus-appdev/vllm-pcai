@@ -349,3 +349,26 @@ RUN set -eux; \
     cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
     python3 /tmp/verify_embed_offload_plugin.py "$VLLM_DIR"; \
     rm -rf /tmp/pcai_embed_offload /tmp/verify_embed_offload_plugin.py
+
+# #62958 head 19af173d3af78533964e380242eb849aef94d16a.
+# Compile only the added operator against the base Torch/CUDA toolchain.
+# Keep the stock vLLM extension; config context and standalone loading are adapted.
+COPY patches/62958-dspark-int8-v032.patch /tmp/dspark-int8.patch
+COPY native/dspark /tmp/dspark-build
+COPY diag/verify_dspark_int8_patch.py /tmp/verify_dspark_int8_patch.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/dspark-int8.patch | cut -d' ' -f1)" = "f65c9778b10b16c90a5b75ac745143e5d7066e9365c3a20ddd472a46e709464a"; \
+    echo 'f619e1943039a67a3254f7e0679e1f3e0faa9d8fccae795f3b20df9e91a8a429  /tmp/dspark-build/include/torch_utils.h' | sha256sum -c -; \
+    echo '52cc0c3cd375d5cca437cbc011519814aefe5fe55eb9698147da50b7a19314c8  /tmp/dspark-build/include/core/registration.h' | sha256sum -c -; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    git -C "$SITE" apply --include='vllm/*' /tmp/dspark-int8.patch; \
+    git -C /tmp/dspark-build apply --include=csrc/dspark_markov_walk.cu /tmp/dspark-int8.patch; \
+    python3 /tmp/dspark-build/build_extension.py build_ext --build-lib /tmp/dspark-build/out --build-temp /tmp/dspark-build/objects; \
+    SO="$(find /tmp/dspark-build/out -name 'pcai_dspark_markov_walk*.so' -print)"; \
+    test -f "$SO"; \
+    cuobjdump --list-elf "$SO" | tee /tmp/dspark-cubins.txt; \
+    grep 'sm_90' /tmp/dspark-cubins.txt; \
+    cp "$SO" "$VLLM_DIR/v1/worker/gpu/spec_decode/dspark/pcai_dspark_markov_walk.so"; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    python3 /tmp/verify_dspark_int8_patch.py "$VLLM_DIR" --installed; \
+    rm -rf /tmp/dspark-build /tmp/dspark-int8.patch /tmp/verify_dspark_int8_patch.py /tmp/dspark-cubins.txt
