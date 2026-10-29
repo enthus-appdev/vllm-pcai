@@ -353,9 +353,11 @@ RUN set -eux; \
 # #62751 da37621 + #61875 1ef812f + #62816 b6e146e, production code only.
 # Upgrade only Humming; keep the base Torch/CUDA dependencies unchanged.
 # PyPI manylinux x86_64 cp310-abi3 wheel, pinned by hash; no source build fallback.
+# Ignore inherited UV_OVERRIDE only for this no-deps install: its unrelated,
+# unhashed NCCL constraint conflicts with --require-hashes. Installed NCCL stays put.
 RUN set -eux; \
     printf '%s\n' 'humming-kernels[cu13]==0.1.18 --hash=sha256:3eee5f7365457708a8962c852a4c797d99439a450dfe16fee47cc39664d080d4' > /tmp/humming-requirement.txt; \
-    if command -v uv >/dev/null 2>&1; then uv pip install --system --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; \
+    if command -v uv >/dev/null 2>&1; then env -u UV_OVERRIDE uv pip install --system --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; \
     else python3 -m pip install --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; fi; \
     rm -f /tmp/humming-requirement.txt
 
