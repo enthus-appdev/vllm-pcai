@@ -112,6 +112,7 @@ class PatchIntegrityTests(unittest.TestCase):
         builder = (ROOT / "native/dspark/build_extension.py").read_text()
         self.assertIn("compute_90a,code=sm_90a", builder)
         self.assertIn("0x020B000000000000ULL", builder)
+        self.assertIn('("USE_CUDA", "1")', builder)
         for path, expected in (
             ("torch_utils.h", "f619e1943039a67a3254f7e0679e1f3e0faa9d8fccae795f3b20df9e91a8a429"),
             ("core/registration.h", "52cc0c3cd375d5cca437cbc011519814aefe5fe55eb9698147da50b7a19314c8"),

@@ -24,7 +24,11 @@ setup(
         sources=[str(ROOT / "bindings.cpp"), str(ROOT / "csrc/dspark_markov_walk.cu")],
         include_dirs=[str(ROOT / "include")],
         # Match the v0.32.0 stable extension's ABI target, not a newer Torch ABI.
-        define_macros=[("TORCH_TARGET_VERSION", "0x020B000000000000ULL")],
+        define_macros=[
+            ("TORCH_TARGET_VERSION", "0x020B000000000000ULL"),
+            # vLLM's CMake target sets this to expose CUDA C-shim declarations.
+            ("USE_CUDA", "1"),
+        ],
         extra_compile_args={
             "cxx": ["-O3", "-std=c++17"],
             "nvcc": ["-O3", "-std=c++17", "--expt-relaxed-constexpr",
