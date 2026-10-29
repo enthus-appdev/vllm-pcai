@@ -121,6 +121,23 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn("--no-deps --only-binary=:all: --require-hashes", dockerfile)
         self.assertIn("3eee5f7365457708a8962c852a4c797d99439a450dfe16fee47cc39664d080d4", dockerfile)
 
+    def test_pinned_indexer_memory_bundle(self):
+        patch = ROOT / "patches/vision-indexer-memory-v032.patch"
+        digest = "1fe6a6db9bf855caa3e27c8f67f829b49e203bf6c9b7995a79ebc45885feff36"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
+        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
+                 if line.startswith("diff --git ")}
+        self.assertEqual(paths, {"vllm/envs.py", "vllm/model_executor/layers/sparse_attn_indexer.py",
+                                 "vllm/models/glm5next/nvidia/sparse_indexer.py",
+                                 "vllm/utils/deep_gemm.py", "vllm/v1/attention/backends/mla/indexer.py"})
+        self.assertNotIn("vllm/models/deepseek_v41/", patch.read_text())
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn(digest, dockerfile)
+        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
+        self.assertIn("python3 /tmp/verify_indexer_memory_patch.py", dockerfile)
+        self.assertIn("COPY diag/verify_fixed_width_logits_patch.py ", dockerfile)
+        self.assertIn("ENV VLLM_SPARSE_INDEXER_FIXED_LOGITS_WIDTH=1", dockerfile)
+
     def test_git_can_parse_every_patch(self):
         patches = sorted((ROOT / "patches").glob("*.patch"))
         self.assertTrue(patches, "No vendored patches found")
