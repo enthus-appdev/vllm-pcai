@@ -14,8 +14,10 @@ import sys
 import torch
 from safetensors import safe_open
 
-sys.path.insert(0, os.environ.get("PCAI_EAQ_SRC", "/checks"))
-from exl3_dense import dense_modules, dequantize_stream, tensor_storage  # noqa: E402
+# The installed plugin package; PCAI_EAQ_SRC may point at a source checkout's experimental/eaq.
+if os.environ.get("PCAI_EAQ_SRC"):
+    sys.path.insert(0, os.environ["PCAI_EAQ_SRC"])
+from pcai_eaq.exl3_dense import dense_modules, dequantize_stream, tensor_storage  # noqa: E402
 
 EAQ = Path(os.environ["EAQ_ROOT"])
 ORIG = Path(os.environ["ORIG_ROOT"])
@@ -72,7 +74,7 @@ def main():
     for target, weight in dequantize_stream(tensors(EAQ, names), selected):
         module = target[: -len(".weight")]
         seen.add(module)
-        bits = sorted({storage[m]["bits_per_weight"] for m in selected
+        bits = sorted({str(storage[m].get("bits_per_weight", "unknown")) for m in selected
                        if m == module or m.startswith(module + ".slice.")})
         ref = original(module)
         result = {"module": module, "shape": list(weight.shape), "bits": bits,

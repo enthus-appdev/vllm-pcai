@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       experimental_eaq:
-        description: Build the separate experimental H100 EAQ image (never production tags)
+        description: Build ONLY the experimental H100 EAQ image instead of the production image (tags end in -eaq-v11)
         type: boolean
         default: false
 
@@ -50,6 +50,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # A run builds one image: production, or with experimental_eaq only the EAQ image.
           - dockerfile: ${{ inputs.experimental_eaq && 'experimental/eaq/Dockerfile' || 'Dockerfile' }}
             flavor: ${{ inputs.experimental_eaq && '-eaq-v11' || '' }}
     steps:

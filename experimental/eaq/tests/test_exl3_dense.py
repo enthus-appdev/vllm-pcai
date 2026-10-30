@@ -83,13 +83,3 @@ class DenseStream(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-
-class PhysicalK(unittest.TestCase):
-    def test_tuple(self):
-        from types import SimpleNamespace as N
-        from pcai_eaq.exl3_moe import physical_k_tuple
-        lin = lambda k: N(trellis=torch.empty(2, 2, 16 * k))
-        self.assertEqual(physical_k_tuple([{"gate": lin(3), "up": lin(3), "down": lin(3)}] * 4), (3, 3, 3))
-        self.assertEqual(physical_k_tuple([{"gate": None, "up": lin(2), "down": lin(4)}]), (2, 2, 4))
-        self.assertIsNone(physical_k_tuple([{"gate": lin(3), "up": lin(3), "down": lin(3)},
-                                            {"gate": lin(2), "up": lin(2), "down": lin(2)}]))

@@ -19,7 +19,9 @@ RUN python3 -m pip install --no-cache-dir ninja setuptools wheel marisa-trie && 
     python3 -m pip install --no-cache-dir --no-build-isolation --no-deps /opt/pcai-sources/vllm-exl3
 COPY experimental/eaq /opt/pcai-sources/pcai-eaq
 RUN python3 -m pip install --no-cache-dir --no-build-isolation --no-deps /opt/pcai-sources/pcai-eaq && \
-    python3 -c 'import torch; import exllamav3_ext; import vllm_exl3_c; import pcai_eaq' && \
+    python3 -c 'import torch; import exllamav3_ext; import vllm_exl3_c; import pcai_eaq; pcai_eaq.check_compat()' && \
     python3 -m unittest discover -s /opt/pcai-sources/pcai-eaq/tests -v
-# Activation is opt-in through PCAI_ENGRAM_DIR. Preserve the base entrypoint.
+# Activation is opt-in through PCAI_ENGRAM_DIR. Preserve the base entrypoint, but not the
+# build user: the image runs as a non-root user (PCAI enforces its own UID at runtime).
+USER 10000004:1001
 LABEL org.opencontainers.image.description="Experimental H100 EAQ v1.1 qualification image; not GPU-qualified"

@@ -133,7 +133,13 @@ def dequantize_stream(weights, modules, reconstruct=reconstruct_exl3):
 
 
 def install():
-    """Route dense layers to BF16 and dequantize their EXL3 tensors while loading."""
+    """Route dense layers to BF16 and dequantize their EXL3 tensors while loading.
+
+    The routing is decided when layers are built, before weights are read, so it applies to
+    the whole process. PCAI_EXL3_DENSE is therefore a per-deployment opt-in, and loading a
+    model without EXL3 dense modules fails instead of silently mis-loading it.
+    """
+    from .compat import check_vllm, require
     from vllm.logger import init_logger
     from vllm.model_executor.model_loader.default_loader import DefaultModelLoader
     from vllm_exl3 import exl3 as plugin
@@ -141,6 +147,9 @@ def install():
     logger = init_logger("vllm." + __name__)
     if getattr(DefaultModelLoader, "_pcai_exl3_dense", False):
         return
+    check_vllm()
+    require(plugin.Exl3Config, "_matches_non_routed_exl3")
+    require(DefaultModelLoader, "get_all_weights", ("self", "model_config", "model"))
     # Dense linears and the LM head become ordinary unquantized (BF16) layers.
     plugin.Exl3Config._matches_non_routed_exl3 = lambda self, prefix: False
 
@@ -149,11 +158,11 @@ def install():
     def get_all_weights(self, model_config, model):
         weights = original(self, model_config, model)
         quant = getattr(model_config.hf_config, "quantization_config", None) or {}
-        if quant.get("quant_method") != "exl3":
-            return weights
-        modules = dense_modules(tensor_storage(model_config.model, quant))
+        modules = dense_modules(tensor_storage(model_config.model, quant)) \
+            if quant.get("quant_method") == "exl3" else {}
         if not modules:
-            return weights
+            raise RuntimeError("PCAI_EXL3_DENSE=bf16 is set, but this model has no EXL3 dense "
+                               "modules; unset it for this deployment")
         logger.info("Reconstructing %d EXL3 dense modules as BF16 at load time", len(modules))
         return dequantize_stream(weights, modules)
 
