@@ -6,6 +6,10 @@
 # tripwires below rather than assuming a newer tag is a strict commit superset.
 FROM vllm/vllm-openai:v0.32.0
 
+# jq for the pcai-inference chart's pre-start init scripts: the storage check and
+# file staging run in this image as POSIX sh + jq (no Python in the chart).
+RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*
+
 # Qwen's enhanced template is baked (not upstream); Gemma uses vLLM's in-image template — serve with
 #   --chat-template /vllm-workspace/examples/tool_chat_template_gemma4.jinja
 COPY chat-template-fix/chat-template/*.jinja /templates/
