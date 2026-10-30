@@ -41,6 +41,8 @@ class DirectTensor:
             if not 2 <= size <= MAX_HEADER:
                 raise ValueError("invalid safetensors header size")
             header = json.loads(f.read(size))
+        if key not in header:
+            raise ValueError(f"tensor {key} not in {filename}")
         meta = header[key]
         if meta["dtype"] not in ("F8_E4M3", "F8_E4M3FN", "F8_E8M0", "F8_E8M0FNU", "U8"):
             raise ValueError("expected one-byte native FP8 or scale tensor")

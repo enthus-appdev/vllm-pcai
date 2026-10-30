@@ -18,6 +18,14 @@ def fixture(path):
     return values
 
 
+def direct_io_supported(path):
+    try:
+        os.close(os.open(path, os.O_RDONLY | os.O_DIRECT))
+        return True
+    except OSError:
+        return False
+
+
 class RowsTest(unittest.TestCase):
     def test_tp_heads_match_upstream_partition(self):
         self.assertEqual(head_partition((11, 13, 17, 19), 0, 2), (0, 2, 0, 24))
@@ -40,6 +48,8 @@ class RowsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             p = Path(root) / "table.safetensors"
             expected = fixture(p)
+            if not direct_io_supported(p):
+                self.skipTest("this filesystem does not support O_DIRECT (e.g. an image build layer)")
             reader = DirectTensor(root, p.name, "weight")
             try:
                 for row in [0, 15, 16, 31, 98, 99, 0]:
@@ -59,6 +69,13 @@ class RowsTest(unittest.TestCase):
             p.write_bytes(p.read_bytes()[:-1])
             with self.assertRaises(ValueError):
                 DirectTensor(root, p.name, "weight")
+
+    def test_missing_key(self):
+        with tempfile.TemporaryDirectory() as root:
+            p = Path(root) / "table.safetensors"
+            fixture(p)
+            with self.assertRaisesRegex(ValueError, "not in table.safetensors"):
+                DirectTensor(root, p.name, "absent")
 
     def test_reject_short_header(self):
         with tempfile.TemporaryDirectory() as root:

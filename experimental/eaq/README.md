@@ -44,13 +44,21 @@ residual graph and TP collective. Lookup is synchronous and reference-oriented;
 it is not a throughput claim. A native CUDA parity check is required before
 treating the torch UE8M0/FP8 reference decoder as qualified.
 
+## Compatibility
+
+Each patch checks at install time that the vLLM and vllm-exl3 internals it replaces still exist with
+the expected signatures, and that vLLM is the qualified 0.32 series. A mismatch stops the server at
+startup with a message naming the changed internal. `PCAI_EAQ_ALLOW_UNTESTED_VLLM=1` skips only the
+version check. The image build runs the same checks (`pcai_eaq.check_compat()`).
+
 ## Tests
 
 ```sh
 python3 -m unittest discover -s experimental/eaq/tests -v
 ```
 
-Row/partition tests use only Python; runtime fixture tests additionally need torch.
+Row/partition tests use only Python; runtime, MoE and dense tests additionally need torch. The
+real O_DIRECT test is skipped on filesystems without O_DIRECT, such as image build layers.
 The fixture graph mocks vLLM and tests both TP head partitions, inactive/padded
 heads, capacity errors and fail-closed graph settings. They do not execute
 multi-GPU collectives or the full model.
