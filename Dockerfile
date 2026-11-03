@@ -315,6 +315,16 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/offload-fix.patch
 
+# Never split a multimodal item when a prefix-cache hit ends inside it (DeepSeek V4 Vision forces disable_chunked_mm_input).
+# vllm#65271, upstream main commit 65a904538d294d9fafc044b164104b2f5f9a9391 (after v0.33.0rc3); production files only.
+COPY patches/65271-mm-prefix-split.patch /tmp/backport.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "8bfa08f8b8e72762f9b976f4adfccf3cd881ea7ee71bf020a15273853ce14c89"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/backport.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/backport.patch
+
 # Order SimpleCPUOffload loads after queued compute reads of the destination blocks.
 # Needed for async scheduling with the host KV tier (speculative steps still reading a block).
 # vllm#60078 production-only diff, head 520208b140dbca471a76c752598b6fff2f8a7092.
