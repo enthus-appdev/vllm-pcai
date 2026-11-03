@@ -277,6 +277,16 @@ assert out.count("<｜end▁of▁sentence｜>") == 1, f"stray mid-turn EOS:\n{ou
 print("deepseek_v4 encoder merges split assistant turns OK")
 PY
 
+# Report cached prompt tokens in the first streamed usage chunk.
+# vllm#65036, upstream main commit aa59a1967b2acbbf3b7598e519c63359a6a6fe8d (after v0.33.0rc3); production files only.
+COPY patches/65036-stream-usage-cache-split.patch /tmp/backport.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "c8097e10297d8a964c7a3588885002a657db0309d7734343ed6a3e011ef64a07"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/backport.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/backport.patch
+
 # CUDA V4 C128 history uses one bounded ring per request, including draft lookahead.
 # Rebased from vllm#58074 head f8bb0ba871415a779de33fadcb40ab2ba5acbc09;
 # preserve v0.33's compressor method split and stream-capture guard.
