@@ -1,11 +1,8 @@
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
-# v0.30.0 contains the production-critical OffloadingConnector bounds fix (vllm#52923),
-# plus the DeepSeek-V4, DSpark, parser, and packed heterogeneous-KV work previously carried by
-# v0.26.0 and later nightlies. Release branches can diverge; verify required behavior with the
-# tripwires below rather than assuming a newer tag is a strict commit superset.
-# Docker's v0.33.0 tag contains release v0.33.0rc3 (4ba787ec9959).
-# Pin the audited manifest: the Git tag v0.33.0 points at a different commit.
+# vLLM v0.33.0 (commit 4ba787ec9959, also tagged v0.33.0rc3), pinned by digest. Release
+# branches can diverge, so a newer tag is not a strict superset of an older one: the checks
+# below verify the behavior this image depends on.
 FROM vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
 
 # jq for the pcai-inference chart's pre-start init scripts: the storage check and
@@ -316,7 +313,7 @@ RUN set -eux; \
     rm -f /tmp/offload-fix.patch
 
 # Never split a multimodal item when a prefix-cache hit ends inside it (DeepSeek V4 Vision forces disable_chunked_mm_input).
-# vllm#65271, upstream main commit 65a904538d294d9fafc044b164104b2f5f9a9391 (after v0.33.0rc3); production files only.
+# vllm#65271, upstream main commit 65a904538d294d9fafc044b164104b2f5f9a9391 (after v0.33.0); production files only.
 COPY patches/65271-mm-prefix-split.patch /tmp/backport.patch
 RUN set -eux; \
     test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "8bfa08f8b8e72762f9b976f4adfccf3cd881ea7ee71bf020a15273853ce14c89"; \
@@ -339,7 +336,7 @@ RUN set -eux; \
     rm -f /tmp/offload-fix.patch
 
 # Allocate the SimpleCPUOffload host KV pool without zero-filling it (faster boot of large host tiers).
-# vllm#64345, upstream main commit 3c39dda2a5da9e4b71b5eb61db686bf669374569 (after v0.33.0rc3); production files only.
+# vllm#64345, upstream main commit 3c39dda2a5da9e4b71b5eb61db686bf669374569 (after v0.33.0); production files only.
 COPY patches/64345-host-pool-no-zero-fill.patch /tmp/backport.patch
 RUN set -eux; \
     test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "35efc65ae158e1fafb7f59e799b26fcee62f949bd7164752702d1c8cd9081989"; \
