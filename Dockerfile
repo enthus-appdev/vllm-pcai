@@ -328,6 +328,16 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/offload-fix.patch
 
+# Allocate the SimpleCPUOffload host KV pool without zero-filling it (faster boot of large host tiers).
+# vllm#64345, upstream main commit 3c39dda2a5da9e4b71b5eb61db686bf669374569 (after v0.33.0rc3); production files only.
+COPY patches/64345-host-pool-no-zero-fill.patch /tmp/backport.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "35efc65ae158e1fafb7f59e799b26fcee62f949bd7164752702d1c8cd9081989"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/backport.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/backport.patch
+
 # Plugin: '--cpu-offload-params ... embed_tokens' puts DeepSeek V4's embedding table in pinned
 # host memory through vLLM's UVA offloader (vLLM offloads layers and towers, never the embedding).
 # Inactive unless that parameter is requested.
