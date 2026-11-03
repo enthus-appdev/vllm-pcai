@@ -348,6 +348,16 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/stability.patch
 
+# Warm up the MRV2 sampler after CUDA graph capture so its buffers do not grow memory under load.
+# vllm#62560, upstream main commit b18775f8938b0c264643b7cd344a9ca2441f5b67 (after v0.33.0rc3); production files only.
+COPY patches/62560-sampler-warmup.patch /tmp/backport.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "f4bd9d37000aebc06eed5211b65df55260915f3a6758c0041c45771680941e5b"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/backport.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/backport.patch
+
 # C1c: retain one earlier semantic SWA boundary without restoring block dropping.
 COPY patches/dspark-swa-prefix-fallback-v033.patch /tmp/prefix-fallback.patch
 RUN set -eux; \
