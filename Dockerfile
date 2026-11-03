@@ -237,6 +237,16 @@ assert first_assert == -1 or first_assert > guard, (
 print("flashmla warmup branch is DSpark-safe OK")
 PY
 
+# Omit null annotations and usage.prompt_tokens_details from chat completions.
+# vllm#64177, upstream main commit f60edccd0079428503f9e9f66e3b651aa4da73db (after v0.33.0rc3); production files only.
+COPY patches/64177-omit-null-usage-details.patch /tmp/backport.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "c558a2898b0eb96454e2df76c4e3169506d120d8b471e04f98b1a4f77aa65416"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/backport.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/backport.patch
+
 # Clients that replay one assistant turn as two consecutive assistant messages (a content-only
 # preamble, then a tool_calls + reasoning message) get a malformed prompt: the encoder emits the
 # Assistant transition only after user/developer messages, so the second message is glued on with a
