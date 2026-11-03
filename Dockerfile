@@ -169,6 +169,7 @@ def build(draft_weights, draft_model):
     with patch("vllm.config.speculative.ModelConfig") as mc:
         d = MagicMock(); d.model = draft_model; d.model_weights = draft_weights
         d.hf_config.model_type = "deepseek_mtp"; d.hf_config.n_predict = None; d.max_model_len = 4096
+        d.hf_config.max_position_embeddings = 4096
         mc.return_value = d
         t = MagicMock(); t.model = CACHE; t.model_weights = S3
         t.using_transformers_backend.return_value = False
@@ -179,6 +180,8 @@ def build(draft_weights, draft_model):
         except Exception as e:
             # These mocks track SpeculativeConfig.__post_init__; a base bump can require more
             # attributes. That is a stale-tripwire failure, NOT evidence the patch is unneeded.
+            import traceback
+            traceback.print_exc()
             raise SystemExit(f"tripwire mocks no longer match this base ({type(e).__name__}: {e})"
                              " — update the mocks, do NOT drop the patch") from e
         return d.model_weights
