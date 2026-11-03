@@ -373,3 +373,15 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/prefix-fallback.patch
+
+# Humming 0.1.19: store fused-E8M0 MoE scales as 4-bit nibbles (two per byte). On SM90 with
+# FP8 activations the rebased scales are 1..12, so this is lossless and halves resident
+# scale memory. Opt-in with HUMMING_USE_PACKED_BS=1; off, kernels behave as before.
+COPY patches/humming-packed-bs.patch /tmp/humming.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/humming.patch | cut -d' ' -f1)" = "623d2dd7cf22d30ca4be81e13fc296be1379bb8b6d6543a872b67e8d7142c798"; \
+    HUMMING_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("humming").origin))')"; \
+    test "$(python3 -c 'import importlib.metadata as m; print(m.version("humming-kernels"))')" = "0.1.19"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$HUMMING_DIR" < /tmp/humming.patch; \
+    find "$HUMMING_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/humming.patch
