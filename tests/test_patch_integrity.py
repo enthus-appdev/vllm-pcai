@@ -83,17 +83,6 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn(digest, dockerfile)
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
 
-    def test_pinned_stability_bundle(self):
-        patch = ROOT / "patches/63427-nested-weak-ref-tensors-v033.patch"
-        digest = "98d005b2c87c9942b01257ce7f2105519b616f7b7ecfc4016610c6e30ae7849d"
-        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
-        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
-                 if line.startswith("diff --git ")}
-        self.assertEqual(paths, {"vllm/utils/torch_utils.py"})
-        dockerfile = (ROOT / "Dockerfile").read_text()
-        self.assertIn(digest, dockerfile)
-        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
-
     def test_fp8_uses_upstream_code_and_dependencies(self):
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertNotIn("COPY patches/vision-fp8", dockerfile)

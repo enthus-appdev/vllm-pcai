@@ -337,17 +337,6 @@ RUN set -eux; \
     cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
     rm -rf /tmp/pcai_embed_offload
 
-# #54163, #60553 and #59030 are upstream; only #63427 (nested weak refs)
-# remains patched.
-COPY patches/63427-nested-weak-ref-tensors-v033.patch /tmp/stability.patch
-RUN set -eux; \
-    test "$(sha256sum /tmp/stability.patch | cut -d' ' -f1)" = "98d005b2c87c9942b01257ce7f2105519b616f7b7ecfc4016610c6e30ae7849d"; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/stability.patch; \
-    else patch -p1 -d "$SITE" < /tmp/stability.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/stability.patch
-
 # C1c: retain one earlier semantic SWA boundary without restoring block dropping.
 COPY patches/dspark-swa-prefix-fallback-v033.patch /tmp/prefix-fallback.patch
 RUN set -eux; \
