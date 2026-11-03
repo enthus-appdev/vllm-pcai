@@ -1,0 +1,28 @@
+diff --git a/vllm/entrypoints/openai/chat_completion/protocol.py b/vllm/entrypoints/openai/chat_completion/protocol.py
+index 1341ef2b86..ca9e8a01a0 100644
+--- a/vllm/entrypoints/openai/chat_completion/protocol.py
++++ b/vllm/entrypoints/openai/chat_completion/protocol.py
+@@ -77,7 +77,9 @@ class ChatMessage(OpenAIBaseModel):
+     role: str
+     content: str | None = None
+     refusal: str | None = None
+-    annotations: OpenAIAnnotation | None = None
++    annotations: list[OpenAIAnnotation] | None = Field(
++        default=None, exclude_if=lambda value: value is None
++    )
+     audio: OpenAIChatCompletionAudio | None = None
+     function_call: FunctionCall | None = None
+     tool_calls: list[ToolCall] = Field(default_factory=list)
+diff --git a/vllm/entrypoints/serve/engine/protocol.py b/vllm/entrypoints/serve/engine/protocol.py
+index 704d6b2455..ef15921996 100644
+--- a/vllm/entrypoints/serve/engine/protocol.py
++++ b/vllm/entrypoints/serve/engine/protocol.py
+@@ -136,5 +136,7 @@ class UsageInfo(OpenAIBaseModel):
+     prompt_tokens: int = 0
+     total_tokens: int = 0
+     completion_tokens: int | None = 0
+-    prompt_tokens_details: PromptTokenUsageInfo | None = None
++    prompt_tokens_details: PromptTokenUsageInfo | None = Field(
++        default=None, exclude_if=lambda value: value is None
++    )
+     completion_tokens_details: CompletionTokenUsageInfo | None = None

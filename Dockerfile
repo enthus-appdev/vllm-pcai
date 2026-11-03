@@ -356,3 +356,60 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/prefix-fallback.patch
+
+# EVAL ONLY (GPU evaluation candidate, not for merge): never split a multimodal item when a prefix-cache hit ends inside it
+# vllm#65271, upstream main commit 65a904538d294d9fafc044b164104b2f5f9a9391; production files only.
+COPY patches/65271-mm-prefix-split.patch /tmp/candidate.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/candidate.patch | cut -d' ' -f1)" = "8bfa08f8b8e72762f9b976f4adfccf3cd881ea7ee71bf020a15273853ce14c89"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/candidate.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+RUN python3 - <<'PY'
+import importlib, os, re
+text = open("/tmp/candidate.patch").read()
+mods = sorted({m.replace("/", ".") for m in re.findall(r"^\+\+\+ b/(vllm/\S+)\.py$", text, re.M)})
+for mod in mods:
+    if not mod.endswith("__init__"):
+        importlib.import_module(mod)
+os.remove("/tmp/candidate.patch")
+print("candidate modules import OK:", mods)
+PY
+
+# EVAL ONLY (GPU evaluation candidate, not for merge): report the prompt cache split in the first streamed usage chunk
+# vllm#65036, upstream main commit aa59a1967b2acbbf3b7598e519c63359a6a6fe8d; production files only.
+COPY patches/65036-stream-usage-cache-split.patch /tmp/candidate.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/candidate.patch | cut -d' ' -f1)" = "c8097e10297d8a964c7a3588885002a657db0309d7734343ed6a3e011ef64a07"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/candidate.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+RUN python3 - <<'PY'
+import importlib, os, re
+text = open("/tmp/candidate.patch").read()
+mods = sorted({m.replace("/", ".") for m in re.findall(r"^\+\+\+ b/(vllm/\S+)\.py$", text, re.M)})
+for mod in mods:
+    if not mod.endswith("__init__"):
+        importlib.import_module(mod)
+os.remove("/tmp/candidate.patch")
+print("candidate modules import OK:", mods)
+PY
+
+# EVAL ONLY (GPU evaluation candidate, not for merge): omit null annotations and usage.prompt_tokens_details
+# vllm#64177, upstream main commit f60edccd0079428503f9e9f66e3b651aa4da73db; production files only.
+COPY patches/64177-omit-null-usage-details.patch /tmp/candidate.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/candidate.patch | cut -d' ' -f1)" = "c558a2898b0eb96454e2df76c4e3169506d120d8b471e04f98b1a4f77aa65416"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/candidate.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+RUN python3 - <<'PY'
+import importlib, os, re
+text = open("/tmp/candidate.patch").read()
+mods = sorted({m.replace("/", ".") for m in re.findall(r"^\+\+\+ b/(vllm/\S+)\.py$", text, re.M)})
+for mod in mods:
+    if not mod.endswith("__init__"):
+        importlib.import_module(mod)
+os.remove("/tmp/candidate.patch")
+print("candidate modules import OK:", mods)
+PY
