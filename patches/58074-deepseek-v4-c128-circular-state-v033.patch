@@ -1,8 +1,8 @@
 diff --git a/vllm/models/deepseek_v4/common/ops/save_partial_states.py b/vllm/models/deepseek_v4/common/ops/save_partial_states.py
-index 6a554b9b4e02..44d3dea3e6d7 100644
+index 6a554b9..44d3dea 100644
 --- a/vllm/models/deepseek_v4/common/ops/save_partial_states.py
 +++ b/vllm/models/deepseek_v4/common/ops/save_partial_states.py
-@@ -110,16 +110,18 @@ def get_warmup_keys(
+@@ -110,16 +110,18 @@ class SavePartialStatesKernel(
              return []
  
          coefficient = 2 if compress_ratio == 4 else 1
@@ -25,7 +25,7 @@ index 6a554b9b4e02..44d3dea3e6d7 100644
          )
  
      def warmup_inputs(self, compile_key: CompileKey) -> dict[str, Any]:
-@@ -142,7 +144,7 @@ def warmup_inputs(self, compile_key: CompileKey) -> dict[str, Any]:
+@@ -142,7 +144,7 @@ class SavePartialStatesKernel(
              positions=TritonWarmupTensor(torch.int64),
              state_cache=TritonWarmupTensor(
                  torch.float32,
@@ -35,10 +35,10 @@ index 6a554b9b4e02..44d3dea3e6d7 100644
                      compile_key.state_cache_stride0,
                      compile_key.state_cache_stride1,
 diff --git a/vllm/models/deepseek_v4/compressor.py b/vllm/models/deepseek_v4/compressor.py
-index 41af0c76605a..a1c32b00c113 100644
+index b7547f0..2878c95 100644
 --- a/vllm/models/deepseek_v4/compressor.py
 +++ b/vllm/models/deepseek_v4/compressor.py
-@@ -12,6 +12,11 @@
+@@ -12,6 +12,11 @@ from vllm.forward_context import get_forward_context
  from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
  from vllm.model_executor.layers.layernorm import RMSNorm
  from vllm.model_executor.layers.linear import MergedColumnParallelLinear
@@ -50,7 +50,7 @@ index 41af0c76605a..a1c32b00c113 100644
  from vllm.models.deepseek_v4.common.ops.fused_compress_quant_cache import (
      compress_norm_rope_store_triton,
      compress_norm_rope_store_two_stage_triton,
-@@ -21,6 +26,7 @@
+@@ -21,6 +26,7 @@ from vllm.models.deepseek_v4.common.ops.save_partial_states import (
      _SAVE_PARTIAL_STATES_KERNEL,
  )
  from vllm.platforms import current_platform
@@ -58,7 +58,7 @@ index 41af0c76605a..a1c32b00c113 100644
  from vllm.v1.attention.backend import (
      AttentionBackend,
      AttentionCGSupport,
-@@ -30,11 +36,160 @@
+@@ -30,11 +36,160 @@ from vllm.v1.attention.backend import (
  )
  from vllm.v1.attention.backends.utils import split_decodes_and_prefills
  from vllm.v1.kv_cache_interface import (
@@ -271,7 +271,7 @@ index 41af0c76605a..a1c32b00c113 100644
  
      def build(
          self,
-@@ -113,6 +290,27 @@ def build(
+@@ -113,6 +290,27 @@ class CompressorMetadataBuilder(AttentionMetadataBuilder):
          token_to_req_indices = common_attn_metadata.token_to_req_indices(
              self.token_to_req_indices
          )
@@ -299,7 +299,7 @@ index 41af0c76605a..a1c32b00c113 100644
          num_decode_tokens = None
          if _prefer_two_stage_compressor():
              _, _, num_decode_tokens, _ = split_decodes_and_prefills(
-@@ -122,15 +320,21 @@ def build(
+@@ -122,15 +320,21 @@ class CompressorMetadataBuilder(AttentionMetadataBuilder):
              self.vllm_config.scheduler_config.async_scheduling
              and self.vllm_config.speculative_config is not None
          )
@@ -324,7 +324,7 @@ index 41af0c76605a..a1c32b00c113 100644
                  else None
              ),
          )
-@@ -156,15 +360,11 @@ def __init__(
+@@ -156,15 +360,11 @@ class CompressorStateCache(torch.nn.Module, AttentionLayerBase):
  
          assert self.dtype == torch.float32
          assert compress_ratio in [4, 128]
@@ -343,7 +343,7 @@ index 41af0c76605a..a1c32b00c113 100644
          if compress_ratio == 4:
              self.block_size = 4
          elif compress_ratio == 128:
-@@ -177,6 +377,14 @@ def bind_kv_cache(self, kv_cache: torch.Tensor) -> None:
+@@ -177,6 +377,14 @@ class CompressorStateCache(torch.nn.Module, AttentionLayerBase):
          self.kv_cache = kv_cache.squeeze(1)
  
      def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
@@ -358,7 +358,7 @@ index 41af0c76605a..a1c32b00c113 100644
          # fp8_ds_mla is the UE8M0 paged layout and needs 576B alignment. Plain
          # full-cache rows share state pages with contiguous KV pages, so padding
          # would break page matching.
-@@ -313,13 +521,17 @@ def __init__(
+@@ -314,13 +522,17 @@ class DeepseekCompressor(nn.Module):
              )
  
          if vllm_config.kernel_config.enable_jit_warmup:
@@ -377,7 +377,7 @@ index 41af0c76605a..a1c32b00c113 100644
                      _SPARSE_ATTN_COMPRESS_NORM_ROPE_STORE_C4_KERNEL,
                      _SPARSE_ATTN_COMPRESS_NORM_ROPE_STORE_FULL_C4_KERNEL,
                      _SPARSE_ATTN_NORM_ROPE_STORE_FULL_KERNEL,
-@@ -334,7 +546,7 @@ def __init__(
+@@ -335,7 +547,7 @@ class DeepseekCompressor(nn.Module):
                          else _SPARSE_ATTN_COMPRESS_NORM_ROPE_STORE_C4_KERNEL
                      ).register_warmup()
                  else:
@@ -386,27 +386,16 @@ index 41af0c76605a..a1c32b00c113 100644
                      if store_full_kv:
                          _SPARSE_ATTN_NORM_ROPE_STORE_FULL_KERNEL.register_warmup()
                      else:
-@@ -375,6 +587,7 @@ def forward(
-         )
-         token_to_req_indices = state_metadata.token_to_req_indices
-         slot_mapping = state_metadata.slot_mapping
-+        tail_slot_mapping = state_metadata.tail_slot_mapping
-         num_actual = slot_mapping.shape[0]
-         block_table = state_metadata.block_table
-         block_size = state_metadata.block_size
-@@ -389,24 +602,27 @@ def forward(
+@@ -387,44 +599,58 @@ class DeepseekCompressor(nn.Module):
              else {"launch_pdl": False}
          )
  
 -        # Store the KV and score (with fused APE addition) in the state.
-+        # C4 stores before compression. CUDA circular C128 reads current-chunk
-+        # rows directly and saves only the ring tail after compression, so a long
-+        # chunk cannot overwrite an earlier group before it is consumed.
-         # NOTE: PDL is disabled — both this kernel and the compress kernels
-         # below depend on preceding kernel outputs (kv/score from the cublas
-         # GEMM; state_cache from this kernel) but neither emits/waits on PDL
-         # grid dependency primitives, so launch_pdl=True caused a
-         # read-after-write race and non-deterministic output.
+-        # NOTE: PDL is disabled — both this kernel and the compress kernels
+-        # below depend on preceding kernel outputs (kv/score from the cublas
+-        # GEMM; state_cache from this kernel) but neither emits/waits on PDL
+-        # grid dependency primitives, so launch_pdl=True caused a
+-        # read-after-write race and non-deterministic output.
 -        _SAVE_PARTIAL_STATES_KERNEL(
 -            kv=kv,
 -            score=score,
@@ -419,6 +408,7 @@ index 41af0c76605a..a1c32b00c113 100644
 -            compress_ratio=self.compress_ratio,
 -            pdl_kwargs=pdl_kwargs,
 -        )
++        # Circular C128 consumes the current chunk before overwriting its ring.
 +        if not state_metadata.is_circular:
 +            _SAVE_PARTIAL_STATES_KERNEL(
 +                kv=kv,
@@ -433,28 +423,68 @@ index 41af0c76605a..a1c32b00c113 100644
 +                pdl_kwargs=pdl_kwargs,
 +            )
  
-         # full graph cannot branch on per-step CPU metadata after capture
-         if (
-@@ -416,6 +632,18 @@ def forward(
-             and forward_context.cudagraph_runtime_mode != CUDAGraphMode.FULL
+         # A captured graph would replay the capture batch's skip decision.
+-        if (
++        skip_compress = (
+             current_platform.is_cuda()
+             and self.head_dim == 512
+             and self.compress_ratio == 128
+             and not torch.cuda.is_current_stream_capturing()
              and state_metadata.c128_boundary is False
-         ):
+-        ):
+-            return
+-
+-        self._compress_norm_rope_store(
+-            state_metadata,
+-            state_cache,
+-            state_width,
+-            positions,
+-            rotary_emb,
+-            attn_metadata,
+-            pdl_kwargs,
+         )
++        if not skip_compress:
++            # Non-CUDA subclasses retain their existing method signature.
++            circular_inputs = (
++                {"kv": kv, "score": score} if state_metadata.is_circular else {}
++            )
++            self._compress_norm_rope_store(
++                state_metadata,
++                state_cache,
++                state_width,
++                positions,
++                rotary_emb,
++                attn_metadata,
++                pdl_kwargs,
++                **circular_inputs,
++            )
++
++        if state_metadata.is_circular:
 +            _SAVE_PARTIAL_STATES_KERNEL(
 +                kv=kv,
 +                score=score,
 +                ape=self.ape,
 +                positions=positions,
 +                state_cache=state_cache,
-+                slot_mapping=tail_slot_mapping,
++                slot_mapping=state_metadata.tail_slot_mapping,
 +                block_size=block_size,
 +                state_width=state_width,
 +                compress_ratio=self.compress_ratio,
 +                pdl_kwargs=pdl_kwargs,
 +            )
-             return
  
-         # Fused: compress → RMSNorm → RoPE → FP8 quant → KV cache write.
-@@ -453,6 +681,11 @@ def forward(
+     def _compress_norm_rope_store(
+         self,
+@@ -435,6 +661,8 @@ class DeepseekCompressor(nn.Module):
+         rotary_emb,
+         attn_metadata: dict[str, Any],
+         pdl_kwargs: dict,
++        kv: torch.Tensor | None = None,
++        score: torch.Tensor | None = None,
+     ) -> None:
+         """Compress the saved states and write K to the cache; a platform
+         subclass overrides it to write its own cache layout."""
+@@ -479,6 +707,11 @@ class DeepseekCompressor(nn.Module):
              # are consumed only here.
              compress_norm_rope_store_fn = _SPARSE_ATTN_COMPRESSOR_CUTEDSL_KERNEL
              extra_kwargs: dict[str, Any] = dict(
@@ -466,25 +496,8 @@ index 41af0c76605a..a1c32b00c113 100644
                  store_full_kv=store_full_kv,
                  store_full_fp8=store_full_fp8,
                  fp8_scale=fp8_scale,
-@@ -496,3 +729,16 @@ def forward(
-             scale_dim=self._scale_dim,
-             **extra_kwargs,
-         )
-+        if state_metadata.is_circular:
-+            _SAVE_PARTIAL_STATES_KERNEL(
-+                kv=kv,
-+                score=score,
-+                ape=self.ape,
-+                positions=positions,
-+                state_cache=state_cache,
-+                slot_mapping=tail_slot_mapping,
-+                block_size=block_size,
-+                state_width=state_width,
-+                compress_ratio=self.compress_ratio,
-+                pdl_kwargs=pdl_kwargs,
-+            )
 diff --git a/vllm/models/deepseek_v4/nvidia/ops/sparse_attn_compress_cutedsl.py b/vllm/models/deepseek_v4/nvidia/ops/sparse_attn_compress_cutedsl.py
-index 74866b096089..c305d727045d 100644
+index 16e612a..305f533 100644
 --- a/vllm/models/deepseek_v4/nvidia/ops/sparse_attn_compress_cutedsl.py
 +++ b/vllm/models/deepseek_v4/nvidia/ops/sparse_attn_compress_cutedsl.py
 @@ -2,7 +2,7 @@
@@ -496,7 +509,7 @@ index 74866b096089..c305d727045d 100644
  """
  
  from __future__ import annotations
-@@ -1081,8 +1081,8 @@ def __call__(
+@@ -1081,8 +1081,8 @@ class SparseAttnCompressNormRopeStoreFullC4Kernel(
          return compile_key, launch_args
  
  
@@ -515,7 +528,7 @@ index 74866b096089..c305d727045d 100644
      rcp_ln2 = 1.4426950408889634
  
      @dataclass(frozen=True)
-@@ -1104,20 +1103,19 @@ class CompileKey:
+@@ -1104,20 +1103,19 @@ class SparseAttnCompressC128Block8Kernel(
  
      @staticmethod
      def kernel(compile_key: CompileKey) -> Any:
@@ -547,7 +560,7 @@ index 74866b096089..c305d727045d 100644
          head_dim = compile_key.head_size
          num_splits = head_dim // head_tile
          state_width = compile_key.state_width
-@@ -1125,10 +1123,15 @@ def kernel(compile_key: CompileKey) -> Any:
+@@ -1125,10 +1123,15 @@ class SparseAttnCompressC128Block8Kernel(
          @cute.kernel
          def device_kernel(
              state_cache: cute.Tensor,
@@ -563,7 +576,7 @@ index 74866b096089..c305d727045d 100644
              compressed_kv: cute.Tensor,
          ):
              block_id, _, _ = cute.arch.block_idx()
-@@ -1155,6 +1158,13 @@ def device_kernel(
+@@ -1155,6 +1158,13 @@ class SparseAttnCompressC128Block8Kernel(
              slot_id = cute.arch.shuffle_sync(slot_id, offset=0)
              position = cute.arch.shuffle_sync(position, offset=0)
              req_idx = cute.arch.shuffle_sync(req_idx, offset=0)
@@ -577,7 +590,7 @@ index 74866b096089..c305d727045d 100644
              boundary = has_position and (
                  (position + Int64(1)) % Int64(compress_ratio) == Int64(0)
              )
-@@ -1218,6 +1228,7 @@ def device_kernel(
+@@ -1218,6 +1228,7 @@ class SparseAttnCompressC128Block8Kernel(
                  )
                  kv_vals = cute.make_rmem_tensor(row_layout, Float32)
                  score_vals = cute.make_rmem_tensor(row_layout, Float32)
@@ -585,7 +598,7 @@ index 74866b096089..c305d727045d 100644
                  local_max = cute.make_rmem_tensor((elems_per_lane,), Float32)
                  local_sum = cute.make_rmem_tensor((elems_per_lane,), Float32)
                  local_product = cute.make_rmem_tensor((elems_per_lane,), Float32)
-@@ -1227,18 +1238,13 @@ def device_kernel(
+@@ -1227,18 +1238,13 @@ class SparseAttnCompressC128Block8Kernel(
                      local_sum[e] = Float32(0.0)
                      local_product[e] = Float32(0.0)
  
@@ -609,7 +622,7 @@ index 74866b096089..c305d727045d 100644
                  )
                  final_mask_and_clamp = const_expr(
                      (cute.arch.WARP_SIZE - num_warps) << 8 | (cute.arch.WARP_SIZE - 1)
-@@ -1247,26 +1253,46 @@ def device_kernel(
+@@ -1247,26 +1253,46 @@ class SparseAttnCompressC128Block8Kernel(
                  score_col_tile = col_tile + Int64(state_width // elems_per_lane)
  
                  for i in cutlass.range_constexpr(rows_per_warp):
@@ -676,7 +689,7 @@ index 74866b096089..c305d727045d 100644
  
                      for e in cutlass.range_constexpr(elems_per_lane):
                          local_max[e] = cute.arch.fmax(local_max[e], score_vals[i, e])
-@@ -1337,20 +1363,30 @@ def device_kernel(
+@@ -1337,20 +1363,30 @@ class SparseAttnCompressC128Block8Kernel(
          @cute.jit
          def host_entrypoint(
              state_cache: cute.Tensor,
@@ -707,7 +720,7 @@ index 74866b096089..c305d727045d 100644
                  compressed_kv,
              ).launch(grid=grid, block=(tb_size, 1, 1), stream=stream)
  
-@@ -1373,7 +1409,7 @@ def get_warmup_keys(self, vllm_config: Any) -> list[CompileKey]:
+@@ -1373,7 +1409,7 @@ class SparseAttnCompressC128Block8Kernel(
      def warmup_inputs(self, compile_key: CompileKey) -> tuple[Any, ...]:
          head_size = compile_key.head_size
          state_width = compile_key.state_width
@@ -716,7 +729,7 @@ index 74866b096089..c305d727045d 100644
              raise ValueError("head_size must be divisible by the 64-wide head tile.")
          num_positions = cute.sym_int()
          num_slots = cute.sym_int()
-@@ -1392,6 +1428,18 @@ def warmup_inputs(self, compile_key: CompileKey) -> tuple[Any, ...]:
+@@ -1392,6 +1428,18 @@ class SparseAttnCompressC128Block8Kernel(
              ),
              assumed_align=16,
          )
@@ -735,7 +748,7 @@ index 74866b096089..c305d727045d 100644
          token_to_req_indices = make_fake_tensor(
              Int32,
              (num_req_indices,),
-@@ -1404,6 +1452,7 @@ def warmup_inputs(self, compile_key: CompileKey) -> tuple[Any, ...]:
+@@ -1404,6 +1452,7 @@ class SparseAttnCompressC128Block8Kernel(
              (cute.sym_int(), block_table_width),
              divisibility=1,
          )
@@ -743,7 +756,7 @@ index 74866b096089..c305d727045d 100644
          compressed_kv = cute.runtime.make_fake_tensor(
              Float32,
              (num_slots, head_size),
-@@ -1412,10 +1461,15 @@ def warmup_inputs(self, compile_key: CompileKey) -> tuple[Any, ...]:
+@@ -1412,10 +1461,15 @@ class SparseAttnCompressC128Block8Kernel(
          )
          return (
              state_cache,
@@ -759,7 +772,7 @@ index 74866b096089..c305d727045d 100644
              compressed_kv,
          )
  
-@@ -1424,14 +1478,19 @@ def __call__(
+@@ -1424,14 +1478,19 @@ class SparseAttnCompressC128Block8Kernel(
          self,
          *,
          state_cache: torch.Tensor,
@@ -780,7 +793,7 @@ index 74866b096089..c305d727045d 100644
          compile_key = self.dispatch(head_size=head_dim, state_width=head_dim)
          if compressed_kv is None:
              compressed_kv = torch.empty(
-@@ -1441,10 +1500,15 @@ def __call__(
+@@ -1441,10 +1500,15 @@ class SparseAttnCompressC128Block8Kernel(
              )
          launch_args = (
              state_cache,
@@ -848,7 +861,7 @@ index 74866b096089..c305d727045d 100644
          head_dim=head_size,
          compressed_kv=compressed_kv,
      )
-@@ -2346,7 +2420,7 @@ def __init__(
+@@ -2346,7 +2420,7 @@ class SparseAttnCompressorCuteDSL:
          *,
          c4_store: SparseAttnCompressNormRopeStoreC4Kernel,
          c4_store_full: SparseAttnCompressNormRopeStoreFullC4Kernel,
@@ -857,7 +870,7 @@ index 74866b096089..c305d727045d 100644
          c128_store: SparseAttnNormRopeStoreKernel,
          c128_store_full: SparseAttnNormRopeStoreFullKernel,
      ) -> None:
-@@ -2359,12 +2433,17 @@ def __init__(
+@@ -2359,12 +2433,17 @@ class SparseAttnCompressorCuteDSL:
      def __call__(
          self,
          state_cache: torch.Tensor,
@@ -875,7 +888,7 @@ index 74866b096089..c305d727045d 100644
          state_width: int,
          cos_sin_cache: torch.Tensor,
          kv_cache: torch.Tensor,
-@@ -2438,19 +2517,23 @@ def __call__(
+@@ -2438,19 +2517,23 @@ class SparseAttnCompressorCuteDSL:
                  "CuTe DSL sparse-attn compressor supports compress_ratio 4 or "
                  f"128, got {compress_ratio}.",
              )
@@ -903,7 +916,7 @@ index 74866b096089..c305d727045d 100644
              head_dim=head_dim,
          )
          if store_full_kv:
-@@ -2491,13 +2574,13 @@ def __call__(
+@@ -2491,13 +2574,13 @@ _SPARSE_ATTN_COMPRESS_NORM_ROPE_STORE_C4_KERNEL = (
  _SPARSE_ATTN_COMPRESS_NORM_ROPE_STORE_FULL_C4_KERNEL = (
      SparseAttnCompressNormRopeStoreFullC4Kernel()
  )

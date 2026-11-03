@@ -10,13 +10,12 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
 2. **Diagnostics endpoint** — `GET /collect_env` on the serving port reports runtime versions and GPU details. Registered on the active ASGI factory (`vllm.entrypoints.launchers.app`), with a build-time HTTP regression test. The route has no authentication of its own; keep it behind the appliance's authenticated ingress.
 
-3. **Vendored patches** — source fixes applied to the v0.32.0 base:
+3. **Vendored patches** — source fixes applied to the digest-pinned v0.33.0rc3 source (Docker tag `v0.33.0`):
    - **DeepSeek generation controls** ([#46257](https://github.com/vllm-project/vllm/pull/46257), head `3dd748819f25fa64250258cdb059c5b0e4487563`) — honor `add_generation_prompt` and `continue_final_message` in the V4/V3.2 encoders.
    - **Speculative drafter weight source** ([#48023](https://github.com/vllm-project/vllm/pull/48023)) — inherit the target's weight source when a drafter shares its checkpoint.
    - **Consecutive assistant messages** ([#50686](https://github.com/vllm-project/vllm/pull/50686)) — merge split assistant turns before DeepSeek V4 encoding.
    - **PCAI queue sizing** — make worker response queues honor `VLLM_MQ_MAX_CHUNK_BYTES_MB` for constrained `/dev/shm`.
    - **C128 circular state** ([#58074](https://github.com/vllm-project/vllm/pull/58074), head `f8bb0ba871415a779de33fadcb40ab2ba5acbc09`) — use bounded per-request CUDA V4 compressor history with speculative lookahead.
-   - **SHM notification backlog** ([#63165](https://github.com/vllm-project/vllm/pull/63165), head `d3ada0390ca556e62150a3c751cdd893a2306ebf`) — poll busy readers' notification sockets to bound the libzmq command backlog.
    - **Sliding-window admission** ([#60045](https://github.com/vllm-project/vllm/pull/60045), head `843db1462a066076d407bb628098140da4455be5`) — count held physical blocks, not null-padded positions, when reserving capacity for asynchronous KV loads.
    - **Eager CPU-cache LRU** ([#62444](https://github.com/vllm-project/vllm/pull/62444), head `a7f3bd29157fb6c96a1eff083cf8fc14136be624`) — refresh CPU-copy recency when a prefix hits on GPU, keeping hot RAM copies from being evicted first.
    - **Host-tier load ordering** ([#60078](https://github.com/vllm-project/vllm/pull/60078), head `520208b140dbca471a76c752598b6fff2f8a7092`) — make SimpleCPUOffload loads wait for queued compute that still reads the destination blocks (the race async scheduling exposes).
@@ -25,7 +24,7 @@ This image adds four layers on top of the stock `vllm/vllm-openai` base. They ar
 
    The base supplies the EOS reasoning-leak fix ([#48748](https://github.com/vllm-project/vllm/pull/48748)); the image checks it with a regression assertion rather than another patch.
 
-4. **Build-time tripwire assertions** — regression assertions and CPU source-isolation checks verify parser classes, engine features, config knobs and patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
+4. **Build-time tripwire assertions** — inline regression assertions verify parser classes, engine features, config knobs and selected patched behavior during the image build. They catch incompatible bases without claiming GPU serving correctness.
 
 ## Combined experiment C1c
 
@@ -36,41 +35,39 @@ nearby changed-question prefix can hit without losing the exact-resend benefit o
 #54163. EAGLE-drop paths, non-speculative paths and non-SWA groups are unchanged.
 This does not guarantee reuse for edits before both retained boundaries.
 
-The extra patch is `patches/dspark-swa-prefix-fallback-v032.patch`.
-No new runtime flag or periodic-retention override is baked in. CPU source tests
-cover 15,360 lookup cases, including every residue, exact/changed resends,
-short prompts, periodic/dense controls and a failing unmodified-policy control.
+The extra patch is `patches/dspark-swa-prefix-fallback-v033.patch`.
+No new runtime flag or periodic-retention override is baked in.
 GPU/host cache occupancy and end-to-end correctness still need qualification.
 
-The base remains PR #62 source `21da126678a5e9fa4d37223516297f8a9bf627e0`.
-Original component patch hashes and runtime controls are unchanged.
+The v0.33 update preserves this policy while retaining upstream's separate
+EAGLE group/drop-group tracking. Runtime controls are unchanged.
 This does not include the indexer-memory or int8 bundle.
-Build/CPU checks do not qualify the combined GPU runtime.
+Build checks do not qualify the combined GPU runtime.
 
 ## Experimental stability bundle
 
-The stability component adds the following bundle:
+The stability component retains the following behavior (only #63427 still needs a patch):
 - [#63427](https://github.com/vllm-project/vllm/pull/63427), head `6ee3f40d6137b487617e2ab1e5ff1a13402a0cda`: recursively weak-reference nested graph outputs.
-- [#54163](https://github.com/vllm-project/vllm/pull/54163), head `3088df4c8770f859e23de3326d0c6dc8ce37f1a7`: preserve DFlash/DSpark's trailing prefix block. Config context is adapted to v0.32.0 (without newer XPRESS code); broad EAGLE lookahead and #48023 remain intact.
+- [#54163](https://github.com/vllm-project/vllm/pull/54163), head `3088df4c8770f859e23de3326d0c6dc8ce37f1a7`: preserve DFlash/DSpark's trailing prefix block. Now supplied upstream; broad EAGLE lookahead and #48023 remain intact.
 - [#60553](https://github.com/vllm-project/vllm/pull/60553), head `5a675fa4d91def4031bc19e5d9bb016a69494d2d`: encoder-cache progress at adjacent-image/lookahead boundaries.
 - [#59030](https://github.com/vllm-project/vllm/pull/59030), head `54e0b57e7c95f48d04f0d365cb2da0cc126071da`: requeue encoder-stalled waiting requests.
 
-The production-only bundle is pinned in `patches/vision-stability-v032.patch`.
-No extra runtime flag is needed. The CPU tripwire executes isolated source predicates,
-nested-reference behavior with stand-ins, and encoder reclamation boundaries; it does
-not qualify actual CUDA graph lifetimes, multi-image scheduling or GPU outputs.
+The remaining patch is `patches/63427-nested-weak-ref-tensors-v033.patch`.
+#54163, #60553 and #59030 are supplied upstream.
+No extra runtime flag is needed. CUDA graph lifetimes, multi-image scheduling and
+GPU outputs require workload qualification.
 Run `python3 -m unittest discover -s tests -v` for local integrity checks.
 
 ## Experimental Hopper FP8 MoE activation image
 
-The FP8 activation component contains:
+The base now supplies all three former FP8 backports:
 - [#62751](https://github.com/vllm-project/vllm/pull/62751), head `da3762163f542e5ca347dc358d976c86a795b1dc`: shared Humming activation-schema resolution.
 - [#61875](https://github.com/vllm-project/vllm/pull/61875), head `1ef812f7be96f5ce000fb002e8c8edc74e122cb1`: DeepSeek V4/V4.1 checkpoint MXFP8 resolves to **block FP8 group128 on SM90** by default.
 - [#62816](https://github.com/vllm-project/vllm/pull/62816), head `b6e146e7f32597af02621c5576fffcfcee497a28`: Humming **0.1.18** and removal of the obsolete DeviceInfo workaround.
 
-Production hunks are unchanged; the requirements-file bump is implemented as a
-hash-pinned x86_64 wheel installation with `--no-deps`, preserving the base Torch
-and CUDA dependency set. The bundle is `patches/vision-fp8-moe-v032.patch`.
+The FP8 patch bundle and custom wheel installation have been removed. The base
+supplies Humming **0.1.19**; we do not downgrade it to the former 0.1.18 pin.
+No additional dependency installation is needed.
 
 **FP8 test:** select `--moe-backend humming`, leave
 `VLLM_HUMMING_INPUT_QUANT_CONFIG` unset, and do not set
@@ -83,14 +80,19 @@ group32 instead). Expect the log:
 A/B. This image changes Humming as well as the activation policy; comparison
 against a prior image alone does not isolate the dependency upgrade.
 
-CPU tripwires check default/override resolution with stand-ins, model declaration,
-installed package version and base Torch version. They do not execute Humming
-kernels or qualify numerical accuracy, graph compilation or performance.
+Numerical accuracy, graph compilation and performance require GPU testing.
 Run `python3 -m unittest discover -s tests -v` locally.
 
-## Base image: `v0.32.0`
+## Base image: `v0.33.0` (RC3 source, digest-pinned)
 
-The `FROM` uses the **[v0.32.0 release](https://github.com/vllm-project/vllm/releases/tag/v0.32.0)**. This retains the ParserEngine, hybrid DFlash, DeepSeek V4 DSpark, packed heterogeneous-KV support, and OffloadingConnector bounds fix ([#52923](https://github.com/vllm-project/vllm/pull/52923)). It also updates Hopper's quantization backend selection; performance still requires workload-specific GPU validation. Building or publishing this image does not redeploy an existing model service.
+The `FROM` uses Docker tag `v0.33.0`, pinned to manifest
+`sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e`.
+Both architectures report build commit `4ba787ec9959e566d3b587a796dff07673324da5`,
+which is the [v0.33.0rc3 release](https://github.com/vllm-project/vllm/releases/tag/v0.33.0rc3).
+There is no Docker `v0.33.0rc3` tag, and the Git `v0.33.0` tag points elsewhere;
+the digest avoids silently switching to unaudited source. SHM notification handling
+and the FP8 bundle are supplied upstream; the remaining patches are listed above.
+Building or publishing this image does not redeploy an existing model service.
 
 DeepSeek V4 DSpark external-cache reuse needs separate validation ([#47890](https://github.com/vllm-project/vllm/issues/47890), proposed fix [#47891](https://github.com/vllm-project/vllm/pull/47891)). This image does not carry that experimental backport or enable offloading. An engine upgrade alone does not establish cache correctness or benefit.
 
@@ -100,14 +102,14 @@ DeepSeek V4 DSpark external-cache reuse needs separate validation ([#47890](http
 
 ```
 vllm-pcai/
-├── Dockerfile                # FROM vllm/vllm-openai:v0.32.0
+├── Dockerfile                # FROM vllm/vllm-openai:v0.33.0@sha256:…
 │                               + Qwen enhanced templates
 │                               + /collect_env diagnostics route and HTTP regression test
 │                               + Parser, loader, KV-cache and transport patches
 │                               + Build-time tripwires for all three models
 ├── chat-template-fix/        # git submodule → allanchan339/Qwen templates
-├── diag/                     # diagnostics route and CPU patch tripwires
-├── patches/                  # v0.32.0 parser, drafter, KV-cache and transport fixes
+├── diag/                     # diagnostics route
+├── patches/                  # remaining parser, drafter, KV-cache and transport fixes
 ├── tests/                    # patch integrity checks (python3 -m unittest discover -s tests)
 └── .dockerignore
 ```

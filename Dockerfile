@@ -4,7 +4,9 @@
 # plus the DeepSeek-V4, DSpark, parser, and packed heterogeneous-KV work previously carried by
 # v0.26.0 and later nightlies. Release branches can diverge; verify required behavior with the
 # tripwires below rather than assuming a newer tag is a strict commit superset.
-FROM vllm/vllm-openai:v0.32.0
+# Docker's v0.33.0 tag contains release v0.33.0rc3 (4ba787ec9959).
+# Pin the audited manifest: the Git tag v0.33.0 points at a different commit.
+FROM vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
 
 # jq for the pcai-inference chart's pre-start init scripts: the storage check and
 # file staging run in this image as POSIX sh + jq (no Python in the chart).
@@ -29,7 +31,7 @@ import inspect
 from argparse import Namespace
 from fastapi.testclient import TestClient
 from vllm.entrypoints.launchers.app import build_app
-from vllm.entrypoints.launchers.cli_args import FrontendArgs
+from vllm.entrypoints.common.cli_args import FrontendArgs
 from unittest.mock import patch
 
 # Frontend defaults avoid instantiating GPU-dependent engine config on the CI runner.
@@ -150,7 +152,7 @@ PY
 # and inherit an empty `model_weights`, so the drafter load dies with "Cannot find any safetensors
 # model weights" AFTER the ~16 min target stream. Upstream vllm#48023 (fixes vllm#42060); vendored
 # because it is still open. Drop once the base carries it — the apply below will fail loudly.
-COPY patches/48023-spec-draft-inherit-model-weights.patch /tmp/spec-draft-weights.patch
+COPY patches/48023-spec-draft-inherit-model-weights-v033.patch /tmp/spec-draft-weights.patch
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/spec-draft-weights.patch; \
@@ -171,8 +173,10 @@ def build(draft_weights, draft_model):
     with patch("vllm.config.speculative.ModelConfig") as mc:
         d = MagicMock(); d.model = draft_model; d.model_weights = draft_weights
         d.hf_config.model_type = "deepseek_mtp"; d.hf_config.n_predict = None; d.max_model_len = 4096
+        d.hf_config.max_position_embeddings = 4096
         mc.return_value = d
         t = MagicMock(); t.model = CACHE; t.model_weights = S3
+        t.using_transformers_backend.return_value = False
         t.hf_text_config.model_type = "deepseek_v3"; t.quantization = None; t.max_model_len = 4096
         try:
             SpeculativeConfig(method="mtp", num_speculative_tokens=1,
@@ -180,6 +184,8 @@ def build(draft_weights, draft_model):
         except Exception as e:
             # These mocks track SpeculativeConfig.__post_init__; a base bump can require more
             # attributes. That is a stale-tripwire failure, NOT evidence the patch is unneeded.
+            import traceback
+            traceback.print_exc()
             raise SystemExit(f"tripwire mocks no longer match this base ({type(e).__name__}: {e})"
                              " — update the mocks, do NOT drop the patch") from e
         return d.model_weights
@@ -271,132 +277,82 @@ assert out.count("<｜end▁of▁sentence｜>") == 1, f"stray mid-turn EOS:\n{ou
 print("deepseek_v4 encoder merges split assistant turns OK")
 PY
 
-# Poll busy readers' notify sockets so libzmq command backlogs remain bounded.
-# vllm#63165 production-source diff, head d3ada0390ca556e62150a3c751cdd893a2306ebf.
-# No queue-size or CUDA changes.
-COPY patches/63165-shm-notify-backlog.patch /tmp/runtime-fix.patch
-COPY diag/verify_shm_notify_patch.py /tmp/verify_shm_notify_patch.py
-RUN set -eux; \
-    test "$(sha256sum /tmp/runtime-fix.patch | cut -d' ' -f1)" = "468f5d097ad180363cc8133021b96ee7fc16aba1b48e1631a194be79f84ea609"; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/runtime-fix.patch; \
-    else patch -p1 -d "$SITE" < /tmp/runtime-fix.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    python3 /tmp/verify_shm_notify_patch.py "$VLLM_DIR"; \
-    rm -f /tmp/runtime-fix.patch /tmp/verify_shm_notify_patch.py
-
 # CUDA V4 C128 history uses one bounded ring per request, including draft lookahead.
-# Production-source diff from vllm#58074 head f8bb0ba871415a779de33fadcb40ab2ba5acbc09.
+# Rebased from vllm#58074 head f8bb0ba871415a779de33fadcb40ab2ba5acbc09;
+# preserve v0.33's compressor method split and stream-capture guard.
 # Python CuTe DSL/Triton JIT only; no compiled csrc changes or weight requantization.
-# CPU tripwire is not GPU correctness qualification; this image is experimental.
-COPY patches/58074-deepseek-v4-c128-circular-state.patch /tmp/runtime-fix.patch
-COPY diag/verify_c128_patch.py /tmp/verify_c128_patch.py
+# GPU correctness remains unqualified; this image is experimental.
+COPY patches/58074-deepseek-v4-c128-circular-state-v033.patch /tmp/runtime-fix.patch
 RUN set -eux; \
-    test "$(sha256sum /tmp/runtime-fix.patch | cut -d' ' -f1)" = "cd299bb8fe6f1e0501d4fa2b63742f08f91549206e88cb6de3b795ffbcb0f9d0"; \
+    test "$(sha256sum /tmp/runtime-fix.patch | cut -d' ' -f1)" = "ac31e8167e3410e64d9177a7b83e2fda2dffc4090bb53f35ba23a54e1c99bfae"; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/runtime-fix.patch; \
     else patch -p1 -d "$SITE" < /tmp/runtime-fix.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    python3 /tmp/verify_c128_patch.py "$VLLM_DIR"; \
-    rm -f /tmp/runtime-fix.patch /tmp/verify_c128_patch.py
+    rm -f /tmp/runtime-fix.patch
 
 # Refresh eager CPU-tier recency for prefixes served from the GPU cache.
 # vllm#62444 production-only diff, head a7f3bd29157fb6c96a1eff083cf8fc14136be624.
-# CPU tripwire checks isolated source behavior; GPU serving remains unqualified.
+# GPU serving remains unqualified.
 COPY patches/62444-simple-offload-lru-refresh.patch /tmp/offload-fix.patch
-COPY diag/verify_simple_offload_lru_patch.py /tmp/verify_simple_offload_lru_patch.py
 RUN set -eux; \
     test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "022cf9e9a8d34b6a9330e472ee2fcc887a6c07643eee4b3352d4b1b556d13970"; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
     else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    python3 /tmp/verify_simple_offload_lru_patch.py "$VLLM_DIR"; \
-    rm -f /tmp/offload-fix.patch /tmp/verify_simple_offload_lru_patch.py
+    rm -f /tmp/offload-fix.patch
 
 # Count physical held blocks, not null-padded table positions, for SWA admission.
 # vllm#60045 production-only diff, head 843db1462a066076d407bb628098140da4455be5.
-# CPU tripwire checks isolated source behavior; GPU serving remains unqualified.
+# GPU serving remains unqualified.
 COPY patches/60045-swa-admission-held-blocks.patch /tmp/offload-fix.patch
-COPY diag/verify_swa_admission_patch.py /tmp/verify_swa_admission_patch.py
 RUN set -eux; \
     test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "d2e0787a02594e4582ebdad78c92d928fd3f19dfc3bed6d98b192f6cc4c729a4"; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
     else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    python3 /tmp/verify_swa_admission_patch.py "$VLLM_DIR"; \
-    rm -f /tmp/offload-fix.patch /tmp/verify_swa_admission_patch.py
+    rm -f /tmp/offload-fix.patch
 
 # Order SimpleCPUOffload loads after queued compute reads of the destination blocks.
 # Needed for async scheduling with the host KV tier (speculative steps still reading a block).
 # vllm#60078 production-only diff, head 520208b140dbca471a76c752598b6fff2f8a7092.
-# CPU tripwire checks isolated source behavior; GPU serving remains unqualified.
+# GPU serving remains unqualified.
 COPY patches/60078-simple-offload-load-after-compute.patch /tmp/offload-fix.patch
-COPY diag/verify_simple_offload_load_order_patch.py /tmp/verify_simple_offload_load_order_patch.py
 RUN set -eux; \
     test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "6efcda2d6eead265dca1c14b1c27175809b5e523226ff15ee10860c4fcd624dc"; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
     else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    python3 /tmp/verify_simple_offload_load_order_patch.py "$VLLM_DIR"; \
-    rm -f /tmp/offload-fix.patch /tmp/verify_simple_offload_load_order_patch.py
+    rm -f /tmp/offload-fix.patch
 
 # Plugin: '--cpu-offload-params ... embed_tokens' puts DeepSeek V4's embedding table in pinned
 # host memory through vLLM's UVA offloader (vLLM offloads layers and towers, never the embedding).
 # Inactive unless that parameter is requested.
 COPY plugins/pcai_embed_offload /tmp/pcai_embed_offload
-COPY diag/verify_embed_offload_plugin.py /tmp/verify_embed_offload_plugin.py
 RUN set -eux; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
-    python3 /tmp/verify_embed_offload_plugin.py "$VLLM_DIR"; \
-    rm -rf /tmp/pcai_embed_offload /tmp/verify_embed_offload_plugin.py
+    rm -rf /tmp/pcai_embed_offload
 
-# Stability bundle on v0.32.0: #63427 (6ee3f40), #54163 (3088df4),
-# #60553 (5a675fa), #59030 (54e0b57). Only #54163 config context is adapted.
-# Preserve broad EAGLE lookahead and the existing model_weights inheritance.
-COPY patches/vision-stability-v032.patch /tmp/stability.patch
-COPY diag/verify_stability_patch.py /tmp/verify_stability_patch.py
+# #54163, #60553 and #59030 are upstream; only #63427 (nested weak refs)
+# remains patched.
+COPY patches/63427-nested-weak-ref-tensors-v033.patch /tmp/stability.patch
 RUN set -eux; \
-    test "$(sha256sum /tmp/stability.patch | cut -d' ' -f1)" = "185ef3b32eab7aefab857e81de107b5714ed94525df654712e1616753f2b7668"; \
+    test "$(sha256sum /tmp/stability.patch | cut -d' ' -f1)" = "98d005b2c87c9942b01257ce7f2105519b616f7b7ecfc4016610c6e30ae7849d"; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/stability.patch; \
     else patch -p1 -d "$SITE" < /tmp/stability.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    python3 /tmp/verify_stability_patch.py "$VLLM_DIR"; \
-    rm -f /tmp/stability.patch /tmp/verify_stability_patch.py
-
-# #62751 da37621 + #61875 1ef812f + #62816 b6e146e, production code only.
-# Upgrade only Humming; keep the base Torch/CUDA dependencies unchanged.
-# PyPI manylinux x86_64 cp310-abi3 wheel, pinned by hash; no source build fallback.
-# Ignore inherited UV_OVERRIDE only for this no-deps install: its unrelated,
-# unhashed NCCL constraint conflicts with --require-hashes. Installed NCCL stays put.
-RUN set -eux; \
-    printf '%s\n' 'humming-kernels[cu13]==0.1.18 --hash=sha256:3eee5f7365457708a8962c852a4c797d99439a450dfe16fee47cc39664d080d4' > /tmp/humming-requirement.txt; \
-    if command -v uv >/dev/null 2>&1; then env -u UV_OVERRIDE uv pip install --system --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; \
-    else python3 -m pip install --no-deps --only-binary=:all: --require-hashes -r /tmp/humming-requirement.txt; fi; \
-    rm -f /tmp/humming-requirement.txt
-
-COPY patches/vision-fp8-moe-v032.patch /tmp/fp8-moe.patch
-COPY diag/verify_fp8_moe_patch.py /tmp/verify_fp8_moe_patch.py
-RUN set -eux; \
-    test "$(sha256sum /tmp/fp8-moe.patch | cut -d' ' -f1)" = "ffa8397c9ddea324e74f4ef259d3d799a5425eca69f56e08a8125683cdbe31d2"; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/fp8-moe.patch; \
-    else patch -p1 -d "$SITE" < /tmp/fp8-moe.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    python3 /tmp/verify_fp8_moe_patch.py "$VLLM_DIR" --installed; \
-    rm -f /tmp/fp8-moe.patch /tmp/verify_fp8_moe_patch.py
+    rm -f /tmp/stability.patch
 
 # C1c: retain one earlier semantic SWA boundary without restoring block dropping.
-COPY patches/dspark-swa-prefix-fallback-v032.patch /tmp/prefix-fallback.patch
-COPY diag/verify_prefix_retention_patch.py /tmp/verify_prefix_retention_patch.py
+COPY patches/dspark-swa-prefix-fallback-v033.patch /tmp/prefix-fallback.patch
 RUN set -eux; \
-    test "$(sha256sum /tmp/prefix-fallback.patch | cut -d' ' -f1)" = "9972e18b4d70b152a812ec44f1cf7244a5698f0c8f1829c03423342442ca23dd"; \
+    test "$(sha256sum /tmp/prefix-fallback.patch | cut -d' ' -f1)" = "83e748d8821e8a715a3fe3acd2e0cb0e43f6b75ed60853853a9e5a29e0400512"; \
     VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    python3 /tmp/verify_prefix_retention_patch.py "$VLLM_DIR"; \
-    rm -f /tmp/prefix-fallback.patch /tmp/verify_prefix_retention_patch.py
+    rm -f /tmp/prefix-fallback.patch

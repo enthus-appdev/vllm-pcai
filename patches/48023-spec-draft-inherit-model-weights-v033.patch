@@ -1,8 +1,8 @@
 diff --git a/vllm/config/speculative.py b/vllm/config/speculative.py
-index b9c612621982..c6e16784bb16 100644
+index 5c76282..9aa23ce 100644
 --- a/vllm/config/speculative.py
 +++ b/vllm/config/speculative.py
-@@ -822,6 +822,25 @@ def __post_init__(self):
+@@ -1429,6 +1429,25 @@ class SpeculativeConfig:
                      config_format=self.target_model_config.config_format,
                  )
  
@@ -25,6 +25,6 @@ index b9c612621982..c6e16784bb16 100644
 +                        self.target_model_config.model_weights
 +                    )
 +
-                 # Old-format Medusa checkpoints (e.g. FasterDecoding/medusa-*)
-                 # omit vocab_size in config.json, so MedusaConfig falls back to
-                 # its default (32001). Align with the target model's vocab size
+                 # Automatically detect the method
+                 if self.method in (
+                     "eagle",
