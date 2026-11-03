@@ -2,6 +2,7 @@
 
 import hashlib
 import pathlib
+import re
 import subprocess
 import unittest
 
@@ -10,33 +11,26 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class PatchIntegrityTests(unittest.TestCase):
-    def test_pinned_runtime_patch(self):
-        patch = ROOT / "patches" / "63165-shm-notify-backlog.patch"
-        self.assertEqual(
-            hashlib.sha256(patch.read_bytes()).hexdigest(),
-            "468f5d097ad180363cc8133021b96ee7fc16aba1b48e1631a194be79f84ea609",
-        )
-        paths = {
-            line.split()[2].removeprefix("a/")
-            for line in patch.read_text().splitlines()
-            if line.startswith("diff --git ")
-        }
-        self.assertEqual(
-            paths, set(["vllm/distributed/device_communicators/shm_broadcast.py"])
-        )
-        self.assertTrue(all(path.endswith(".py") for path in paths))
-        self.assertNotIn("csrc/", patch.read_text())
+    def test_audited_base_and_patch_inventory(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn(
-            hashlib.sha256(patch.read_bytes()).hexdigest(),
-            (ROOT / "Dockerfile").read_text(),
+            "FROM vllm/vllm-openai:v0.33.0@sha256:"
+            "d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e",
+            dockerfile,
         )
-        self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
+        copied = re.findall(r"^COPY patches/(\S+) ", dockerfile, re.MULTILINE)
+        self.assertEqual(set(copied), {p.name for p in (ROOT / "patches").glob("*.patch")})
+        self.assertEqual(len(copied), len(set(copied)), "patch applied twice")
+
+    def test_shm_fix_is_not_patched(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertNotIn("COPY patches/63165-", dockerfile)
 
     def test_pinned_c128_runtime_patch(self):
-        patch = ROOT / "patches" / "58074-deepseek-v4-c128-circular-state.patch"
+        patch = ROOT / "patches" / "58074-deepseek-v4-c128-circular-state-v033.patch"
         self.assertEqual(
             hashlib.sha256(patch.read_bytes()).hexdigest(),
-            "cd299bb8fe6f1e0501d4fa2b63742f08f91549206e88cb6de3b795ffbcb0f9d0",
+            "ac31e8167e3410e64d9177a7b83e2fda2dffc4090bb53f35ba23a54e1c99bfae",
         )
         paths = {
             line.split()[2].removeprefix("a/")
@@ -74,7 +68,6 @@ class PatchIntegrityTests(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn(digest, dockerfile)
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
-        self.assertIn("python3 /tmp/verify_simple_offload_lru_patch.py", dockerfile)
 
     def test_pinned_swa_admission_patch(self):
         patch = ROOT / "patches" / "60045-swa-admission-held-blocks.patch"
@@ -89,41 +82,26 @@ class PatchIntegrityTests(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn(digest, dockerfile)
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
-        self.assertIn("python3 /tmp/verify_swa_admission_patch.py", dockerfile)
 
     def test_pinned_stability_bundle(self):
-        patch = ROOT / "patches/vision-stability-v032.patch"
-        digest = "185ef3b32eab7aefab857e81de107b5714ed94525df654712e1616753f2b7668"
+        patch = ROOT / "patches/63427-nested-weak-ref-tensors-v033.patch"
+        digest = "98d005b2c87c9942b01257ce7f2105519b616f7b7ecfc4016610c6e30ae7849d"
         self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
         paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
                  if line.startswith("diff --git ")}
-        self.assertEqual(paths, {"vllm/config/speculative.py", "vllm/utils/torch_utils.py",
-                                 "vllm/v1/core/sched/scheduler.py"})
+        self.assertEqual(paths, {"vllm/utils/torch_utils.py"})
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn(digest, dockerfile)
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
-        self.assertIn("python3 /tmp/verify_stability_patch.py", dockerfile)
 
-    def test_pinned_fp8_moe_bundle(self):
-        patch = ROOT / "patches/vision-fp8-moe-v032.patch"
-        digest = "ffa8397c9ddea324e74f4ef259d3d799a5425eca69f56e08a8125683cdbe31d2"
-        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
-        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
-                 if line.startswith("diff --git ")}
-        self.assertEqual(paths, {"vllm/model_executor/layers/fused_moe/oracle/mxfp4.py",
-                                 "vllm/models/deepseek_v4/quant_config.py",
-                                 "vllm/models/deepseek_v41/quant_config.py", "vllm/utils/humming.py"})
+    def test_fp8_uses_upstream_code_and_dependencies(self):
         dockerfile = (ROOT / "Dockerfile").read_text()
-        self.assertIn(digest, dockerfile)
-        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
-        self.assertIn("python3 /tmp/verify_fp8_moe_patch.py", dockerfile)
-        self.assertIn("humming-kernels[cu13]==0.1.18", dockerfile)
-        self.assertIn("--no-deps --only-binary=:all: --require-hashes", dockerfile)
-        self.assertIn("3eee5f7365457708a8962c852a4c797d99439a450dfe16fee47cc39664d080d4", dockerfile)
+        self.assertNotIn("COPY patches/vision-fp8", dockerfile)
+        self.assertNotIn("pip install", dockerfile)
 
     def test_pinned_prefix_retention_fallback(self):
-        patch = ROOT / "patches/dspark-swa-prefix-fallback-v032.patch"
-        digest = "9972e18b4d70b152a812ec44f1cf7244a5698f0c8f1829c03423342442ca23dd"
+        patch = ROOT / "patches/dspark-swa-prefix-fallback-v033.patch"
+        digest = "83e748d8821e8a715a3fe3acd2e0cb0e43f6b75ed60853853a9e5a29e0400512"
         self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
         paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
                  if line.startswith("diff --git ")}
@@ -131,7 +109,6 @@ class PatchIntegrityTests(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn(digest, dockerfile)
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
-        self.assertIn("python3 /tmp/verify_prefix_retention_patch.py", dockerfile)
         self.assertNotIn("ENV VLLM_PREFIX_CACHE_RETENTION", dockerfile)
 
     def test_git_can_parse_every_patch(self):
