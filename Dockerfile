@@ -356,3 +356,22 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/prefix-fallback.patch
+
+# EVAL ONLY (GPU evaluation candidate, not for merge): SimpleCPUOffload host KV pool without zero-fill
+# vllm#64345, upstream main commit 3c39dda2a5da9e4b71b5eb61db686bf669374569; production files only.
+COPY patches/64345-host-pool-no-zero-fill.patch /tmp/candidate.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/candidate.patch | cut -d' ' -f1)" = "35efc65ae158e1fafb7f59e799b26fcee62f949bd7164752702d1c8cd9081989"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/candidate.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+RUN python3 - <<'PY'
+import importlib, os, re
+text = open("/tmp/candidate.patch").read()
+mods = sorted({m.replace("/", ".") for m in re.findall(r"^\+\+\+ b/(vllm/\S+)\.py$", text, re.M)})
+for mod in mods:
+    if not mod.endswith("__init__"):
+        importlib.import_module(mod)
+os.remove("/tmp/candidate.patch")
+print("candidate modules import OK:", mods)
+PY
