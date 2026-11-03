@@ -356,3 +356,22 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/prefix-fallback.patch
+
+# EVAL ONLY (GPU evaluation candidate, not for merge): MRV2 sampler warm-up after CUDA graph capture
+# vllm#62560, upstream main commit b18775f8938b0c264643b7cd344a9ca2441f5b67; production files only.
+COPY patches/62560-sampler-warmup.patch /tmp/candidate.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/candidate.patch | cut -d' ' -f1)" = "f4bd9d37000aebc06eed5211b65df55260915f3a6758c0041c45771680941e5b"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/candidate.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+RUN python3 - <<'PY'
+import importlib, os, re
+text = open("/tmp/candidate.patch").read()
+mods = sorted({m.replace("/", ".") for m in re.findall(r"^\+\+\+ b/(vllm/\S+)\.py$", text, re.M)})
+for mod in mods:
+    if not mod.endswith("__init__"):
+        importlib.import_module(mod)
+os.remove("/tmp/candidate.patch")
+print("candidate modules import OK:", mods)
+PY
