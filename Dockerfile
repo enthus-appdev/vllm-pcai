@@ -291,18 +291,6 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/runtime-fix.patch
 
-# Refresh eager CPU-tier recency for prefixes served from the GPU cache.
-# vllm#62444 production-only diff, head a7f3bd29157fb6c96a1eff083cf8fc14136be624.
-# GPU serving remains unqualified.
-COPY patches/62444-simple-offload-lru-refresh.patch /tmp/offload-fix.patch
-RUN set -eux; \
-    test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "022cf9e9a8d34b6a9330e472ee2fcc887a6c07643eee4b3352d4b1b556d13970"; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
-    else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/offload-fix.patch
-
 # Count physical held blocks, not null-padded table positions, for SWA admission.
 # vllm#60045 production-only diff, head 843db1462a066076d407bb628098140da4455be5.
 # GPU serving remains unqualified.
