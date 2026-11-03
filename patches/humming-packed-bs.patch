@@ -1,0 +1,148 @@
+diff --git a/config/config.py b/config/config.py
+index ed5bdc9..bba4b4b 100644
+--- a/config/config.py
++++ b/config/config.py
+@@ -1,6 +1,7 @@
+ import dataclasses
+ import functools
+ import math
++import os
+ from typing import ClassVar
+ 
+ import torch
+@@ -64,6 +65,10 @@ class LayerConfig(BaseHummingConfig):
+ 
+     # packed-K layout (wgmma + 8-bit activation + even-bit weight only)
+     use_packed_k_layout: bool | None = None
++    # Store fused-E8M0 group scales as 4-bit nibbles (two per byte). With FP8
++    # activations the rebased scales are 1..12, so this is lossless. None: enabled
++    # by HUMMING_USE_PACKED_BS=1 where the kernel supports it.
++    use_packed_bs: bool | None = None
+ 
+     _cpp_extra_names: ClassVar[tuple[str, ...]] = (
+         "is_channel_weight_scale",
+@@ -426,6 +431,22 @@ class LayerConfig(BaseHummingConfig):
+             assert self.a_dtype.num_bits == 8, "use_packed_k_layout requires 8-bit activation"
+             assert self.b_dtype.num_bits % 2 == 0, "use_packed_k_layout requires even-bit weight"
+ 
++        can_use_packed_bs = bool(
++            self.use_fused_e8m0_scale
++            and self.a_dtype == dtypes.float8e4m3
++            and self.use_packed_k_layout
++            and not self.use_block_scaled_mma
++            and self.weight_scale_type == WeightScaleType.GROUP
++            and self.shape_n % 32 == 0
++        )
++        if self.use_packed_bs is None:
++            self.use_packed_bs = can_use_packed_bs and os.environ.get("HUMMING_USE_PACKED_BS") == "1"
++        elif self.use_packed_bs:
++            assert can_use_packed_bs, (
++                "use_packed_bs requires fused E8M0 group scales with FP8 activations, "
++                "the packed-K layout and shape_n % 32 == 0"
++            )
++
+         if type(self) is LayerConfig:
+             self._config_str = self.to_str()
+ 
+diff --git a/include/humming/memory/g2s_loader/loader_bs.cuh b/include/humming/memory/g2s_loader/loader_bs.cuh
+index b4749cd..29e87ab 100644
+--- a/include/humming/memory/g2s_loader/loader_bs.cuh
++++ b/include/humming/memory/g2s_loader/loader_bs.cuh
+@@ -27,8 +27,13 @@ private:
+   static constexpr uint32_t kGroupSize = Ctx::kWeightScaleGroupSize > 0 ? Ctx::kWeightScaleGroupSize : ProblemShape::K;
+   static constexpr uint32_t kGroupSizeN = kIsBlock ? Ctx::kWeightScaleGroupSizeN : 1;
+ 
+-  static constexpr uint32_t kSmemStride = CEIL_DIV(BlockShape::N, kGroupSizeN) * ElementBS::kBits / 32 / 4;
+-  static constexpr uint32_t kGmemStride = ProblemShape::N * ElementBS::kBits / 32 / 4;
++  // Packed scales: two 4-bit values per byte, loaded with cp.async (no TMA map).
++  static constexpr bool kUsePackedBS = Ctx::kUsePackedBs;
++  static constexpr uint32_t kStorageBits = kUsePackedBS ? 4 : ElementBS::kBits;
++  static_assert(!kUsePackedBS || (!kUseTma && kIsGroup && !kUseBlockScaledMma), "packed BS: group scales via cp.async only");
++  static_assert(!kUsePackedBS || (BlockShape::N % 32 == 0 && ProblemShape::N % 32 == 0), "packed BS rows must be 16-byte aligned");
++  static constexpr uint32_t kSmemStride = CEIL_DIV(BlockShape::N, kGroupSizeN) * kStorageBits / 32 / 4;
++  static constexpr uint32_t kGmemStride = ProblemShape::N * kStorageBits / 32 / 4;
+   static constexpr uint32_t kProblemNumGroups = CEIL_DIV(ProblemShape::K, kGroupSize);
+   static constexpr uint32_t kGmemExpertStride = kGmemStride * kProblemNumGroups;
+   static constexpr uint32_t kNumGroups = CEIL_DIV(BlockShape::K, kGroupSize);
+diff --git a/include/humming/memory/s2r_loader/loader_bs.cuh b/include/humming/memory/s2r_loader/loader_bs.cuh
+index 548ab9a..21207fa 100644
+--- a/include/humming/memory/s2r_loader/loader_bs.cuh
++++ b/include/humming/memory/s2r_loader/loader_bs.cuh
+@@ -109,14 +109,25 @@ public:
+     const uint32_t n_tile = ctx.n_warp_offset() / 16 + iter_id;
+     // Layout1 packs the two N8 scale rows used by an N16 RS fragment.
+     const uint32_t n_index = ctx.lane_id() / 4 * 4 + n_tile % 4 + n_tile / 4 * 32;
+-    const uint16_t *scales = reinterpret_cast<const uint16_t *>(smem_ptr);
+     PRAGMA_UNROLL
+     for (uint32_t slab = 0; slab < kNumKSlabs; slab += 2) {
+       const uint32_t k_base = ctx.k_warp_offset() + slab * kPartMmaShapeK;
+       const uint32_t group0 = k_base / kGroupSize;
+       const uint32_t group1 = (k_base + kPartMmaShapeK) / kGroupSize;
+-      regs_ptr[slab / 2] = scales[group0 * BlockShape::N / 2 + n_index] |
+-                           (uint32_t(scales[group1 * BlockShape::N / 2 + n_index]) << 16);
++      const uint32_t index0 = group0 * BlockShape::N / 2 + n_index;
++      const uint32_t index1 = group1 * BlockShape::N / 2 + n_index;
++      if constexpr (Ctx::kUsePackedBs) {
++        // Byte i holds the two scales of 16-bit word i as nibbles (low first);
++        // expand them back to the byte pair the dequant expects.
++        const uint8_t *packed = reinterpret_cast<const uint8_t *>(smem_ptr);
++        const uint32_t pair0 = packed[index0];
++        const uint32_t pair1 = packed[index1];
++        regs_ptr[slab / 2] = (pair0 & 0x0Fu) | ((pair0 & 0xF0u) << 4) |
++                             ((pair1 & 0x0Fu) << 16) | ((pair1 & 0xF0u) << 20);
++      } else {
++        const uint16_t *scales = reinterpret_cast<const uint16_t *>(smem_ptr);
++        regs_ptr[slab / 2] = scales[index0] | (uint32_t(scales[index1]) << 16);
++      }
+     }
+   }
+ 
+diff --git a/kernel/humming.py b/kernel/humming.py
+index a50fccc..c45fe13 100644
+--- a/kernel/humming.py
++++ b/kernel/humming.py
+@@ -604,6 +604,9 @@ class HummingKernel(KernelRuntime, LayerConfig, ComputeConfig, TuningConfig):
+         is_group_weight_scale = self.is_group_weight_scale
+         if not (is_channel_weight_scale or is_group_weight_scale):
+             self.use_tma_bs = False
++        if self.use_packed_bs:
++            # The launcher's BS tensor map assumes one byte per scale.
++            self.use_tma_bs = False
+         if not self.is_channel_weight_scale_2:
+             self.use_tma_bs2 = False
+         if not self.has_zero_point:
+diff --git a/transform.py b/transform.py
+index 360993c..667dec4 100644
+--- a/transform.py
++++ b/transform.py
+@@ -527,6 +527,21 @@ def transform_humming_weight_scale(
+     return weight_scale.contiguous().view(orig_shape)
+ 
+ 
++def pack_scale_nibbles(weight_scale: torch.Tensor) -> torch.Tensor:
++    """Pack adjacent 4-bit scale values along the last dimension, low nibble first.
++
++    Byte i of the result holds elements 2i (bits 0-3) and 2i+1 (bits 4-7), so a
++    16-bit read of elements (2i, 2i+1) becomes an 8-bit read of byte i.
++    """
++    scales = weight_scale.view(torch.uint8)
++    if scales.shape[-1] % 2:
++        raise ValueError(f"packed scales need an even last dimension, got {tuple(scales.shape)}")
++    if int(scales.max()) > 15:
++        raise ValueError(f"scale value {int(scales.max())} does not fit in 4 bits")
++    packed = scales[..., 0::2] | (scales[..., 1::2] << 4)
++    return packed.contiguous().view(weight_scale.dtype)
++
++
+ def transform_humming_zero_point(
+     zero_point: torch.Tensor,
+     dtype: dtypes.DataType,
+@@ -644,6 +659,8 @@ def transform_humming_tensors(
+             mxmma_scale_vec=mxmma_scale_vec,
+             is_umma=is_mxmma and config.sm_version // 10 in (10, 11),
+         )
++        if config.use_packed_bs:
++            weight_scale = pack_scale_nibbles(weight_scale)
+ 
+     if zero_point is not None:
+         use_grouped_fp4_zp_layout = (
