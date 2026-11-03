@@ -171,6 +171,7 @@ def build(draft_weights, draft_model):
         d.hf_config.model_type = "deepseek_mtp"; d.hf_config.n_predict = None; d.max_model_len = 4096
         mc.return_value = d
         t = MagicMock(); t.model = CACHE; t.model_weights = S3
+        t.using_transformers_backend.return_value = False
         t.hf_text_config.model_type = "deepseek_v3"; t.quantization = None; t.max_model_len = 4096
         try:
             SpeculativeConfig(method="mtp", num_speculative_tokens=1,
