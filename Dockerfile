@@ -376,3 +376,18 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/prefix-fallback.patch
+
+# EVAL ONLY (GPU evaluation candidate, not for merge): DSpark drafter with fewer routed experts.
+# VLLM_PCAI_DSPARK_KEPT_EXPERTS=<json> loads only the listed experts per draft layer and
+# slices the router rows; VLLM_PCAI_DSPARK_CAPTURE_DIR=<dir> (--enforce-eager) records draft
+# router inputs for /opt/pcai/dspark_reap.py. Neither set: identical to the base.
+COPY patches/dspark-pruned-experts.patch /tmp/candidate.patch
+COPY tools/dspark_reap.py /opt/pcai/dspark_reap.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/candidate.patch | cut -d' ' -f1)" = "28bc6196e17270efac06ef0d85aa307356701f800a7370dc4f0538c663504bc9"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/candidate.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/candidate.patch; \
+    python3 -c 'import vllm.models.deepseek_v4.nvidia.dspark as d, vllm.v1.worker.gpu_worker; assert d.arm_router_capture'; \
+    python3 /opt/pcai/dspark_reap.py --help > /dev/null

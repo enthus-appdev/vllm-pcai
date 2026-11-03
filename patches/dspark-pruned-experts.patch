@@ -1,0 +1,295 @@
+diff --git a/vllm/models/deepseek_v4/nvidia/dspark.py b/vllm/models/deepseek_v4/nvidia/dspark.py
+index dda1026..61f651c 100644
+--- a/vllm/models/deepseek_v4/nvidia/dspark.py
++++ b/vllm/models/deepseek_v4/nvidia/dspark.py
+@@ -9,6 +9,9 @@ To implement non-causal attention, we leverage the sparse attention implementati
+ include the future query tokens in the top-k indices for each query token.
+ """
+ 
++import atexit
++import json
++import os
+ from collections.abc import Iterable
+ 
+ import regex as re
+@@ -67,6 +70,158 @@ logger = init_logger(__name__)
+ # fp4 experts register ``.weight_scale``; block-fp8 experts ``.weight_scale_inv``.
+ _EXPERT_SCALE_RE = re.compile(r"\.experts\.\d+\.w[123]\.scale$")
+ _CONTEXT_WKV_RE = re.compile(r"^mtp\.(\d+)\.attn\.wkv\.(.+)$")
++_MTP_EXPERT_RE = re.compile(r"^mtp\.(\d+)\.ffn\.experts\.(\d+)\.")
++_MTP_ROUTER_RE = re.compile(r"^mtp\.(\d+)\.ffn\.gate\.(weight|bias|bias_vl)$")
++
++# JSON {"layers": {"0": [ids], "1": [...], ...}}: the routed experts each draft
++# layer keeps, as checkpoint ids. The drafter is built with that many experts;
++# the others are not loaded, and the router keeps only the matching rows.
++_KEPT_EXPERTS_ENV = "VLLM_PCAI_DSPARK_KEPT_EXPERTS"
++# Directory: record each draft layer's MoE inputs and routing for calibration.
++_CAPTURE_DIR_ENV = "VLLM_PCAI_DSPARK_CAPTURE_DIR"
++_CAPTURE_TOKENS_ENV = "VLLM_PCAI_DSPARK_CAPTURE_TOKENS"
++
++
++def _load_kept_experts(
++    path: str, num_layers: int, num_experts: int, top_k: int
++) -> list[list[int]]:
++    with open(path) as f:
++        layers = json.load(f)["layers"]
++    kept = [layers[str(i)] for i in range(num_layers)]
++    for i, ids in enumerate(kept):
++        if ids != sorted(set(ids)) or not all(0 <= e < num_experts for e in ids):
++            raise ValueError(
++                f"{path}: layer {i} must list sorted, unique expert ids "
++                f"in [0, {num_experts})"
++            )
++    if len({len(ids) for ids in kept}) != 1 or not top_k <= len(kept[0]):
++        raise ValueError(
++            f"{path}: every draft layer must keep the same number of experts, "
++            f"at least top-k ({top_k})"
++        )
++    return kept
++
++
++def _select_kept_experts(
++    weights: Iterable[tuple[str, torch.Tensor]], kept: list[list[int]]
++) -> Iterable[tuple[str, torch.Tensor]]:
++    """Drop unkept draft experts, renumber kept ones, slice router rows."""
++    new_id = [{old: new for new, old in enumerate(ids)} for ids in kept]
++    rows = [torch.tensor(ids, dtype=torch.long) for ids in kept]
++    for name, weight in weights:
++        if m := _MTP_EXPERT_RE.match(name):
++            layer = int(m.group(1))
++            new = new_id[layer].get(int(m.group(2)))
++            if new is None:
++                continue
++            name = f"mtp.{layer}.ffn.experts.{new}.{name[m.end() :]}"
++        elif m := _MTP_ROUTER_RE.match(name):
++            index = rows[int(m.group(1))].to(weight.device)
++            weight = weight.index_select(0, index)
++        yield name, weight
++
++
++class _RouterCapture:
++    """Record what each draft-layer router sees and selects (calibration).
++
++    Rank 0 writes, per draft layer, its MoE input hidden states, input ids and
++    the selected experts with their normalized gate weights. Recording starts
++    only once the worker finished warmup, so profiling and warmup batches are
++    excluded. Requires eager execution: graph replay bypasses this hook.
++    """
++
++    armed = False
++
++    def __init__(self, directory: str, max_tokens: int) -> None:
++        from vllm.distributed import get_tensor_model_parallel_rank
++
++        self.directory = directory
++        self.max_tokens = max_tokens
++        self.enabled = get_tensor_model_parallel_rank() == 0
++        self.counts: dict[int, int] = {}
++        self.pending: dict[int, list[dict[str, torch.Tensor]]] = {}
++        self.files: dict[int, int] = {}
++        if self.enabled:
++            os.makedirs(directory, exist_ok=True)
++            atexit.register(self.flush_all)
++
++    def flush_all(self) -> None:
++        for layer in list(self.pending):
++            self._flush(layer)
++
++    def wrap(self, layer: int, moe: nn.Module) -> None:
++        forward = moe.forward
++
++        def capture_forward(hidden_states, input_ids=None, mega_gate_metadata=None):
++            if self.enabled and _RouterCapture.armed:
++                self._record(layer, moe, hidden_states, input_ids)
++            return forward(hidden_states, input_ids, mega_gate_metadata)
++
++        moe.forward = capture_forward
++
++    @torch.inference_mode()
++    def _record(self, layer, moe, hidden_states, input_ids) -> None:
++        from vllm.model_executor.layers.fused_moe.router.fused_topk_bias_router import (  # noqa: E501
++            fused_topk_bias,
++        )
++
++        count = self.counts.get(layer, 0)
++        if count >= self.max_tokens or hidden_states.shape[0] == 0:
++            return
++        valid = slice(None)
++        if is_forward_context_available():
++            is_padding = get_forward_context().is_padding
++            if is_padding is not None:
++                valid = ~is_padding[: hidden_states.shape[0]]
++        bias_vl = getattr(moe.gate, "bias_vl", None)
++        router_logits, _ = moe.gate(hidden_states)
++        weights, ids = fused_topk_bias(
++            hidden_states=hidden_states,
++            gating_output=router_logits,
++            scoring_func=moe.scoring_func,
++            e_score_correction_bias=moe.gate.e_score_correction_bias.data,
++            topk=moe.n_activated_experts,
++            renormalize=moe.renormalize,
++            input_tokens=input_ids,
++            routed_scaling_factor=1.0,
++            bias_vl=bias_vl.data if bias_vl is not None else None,
++            image_sentinel_lo=moe.image_sentinel_lo if bias_vl is not None else 0,
++        )
++        record = {
++            "hidden_states": hidden_states[valid],
++            "input_ids": input_ids[valid] if input_ids is not None else None,
++            "topk_ids": ids[valid],
++            "topk_weights": weights[valid],
++        }
++        record = {k: v.cpu() for k, v in record.items() if v is not None}
++        self.counts[layer] = count + record["topk_ids"].shape[0]
++        self.pending.setdefault(layer, []).append(record)
++        if (
++            sum(r["topk_ids"].shape[0] for r in self.pending[layer]) >= 4096
++            or self.counts[layer] >= self.max_tokens
++        ):
++            self._flush(layer)
++
++    def _flush(self, layer: int) -> None:
++        records = self.pending.pop(layer, [])
++        if not records:
++            return
++        merged = {k: torch.cat([r[k] for r in records]) for k in records[0]}
++        index = self.files.get(layer, 0)
++        self.files[layer] = index + 1
++        path = os.path.join(self.directory, f"L{layer}-{index:05d}.pt")
++        torch.save(merged, path + ".tmp")
++        os.replace(path + ".tmp", path)
++        logger.info(
++            "DSpark router capture: layer %d, %d tokens recorded",
++            layer,
++            self.counts[layer],
++        )
++
++
++def arm_router_capture() -> None:
++    """Start recording; the worker calls this after warmup."""
++    _RouterCapture.armed = True
+ 
+ 
+ def _duplicate_context_wkv_weights(
+@@ -129,16 +284,44 @@ class DSparkDeepseekV4Model(nn.Module):
+         )
+ 
+         current_vllm_config = get_current_vllm_config()
++        self.kept_experts: list[list[int]] | None = None
++        if kept_path := os.environ.get(_KEPT_EXPERTS_ENV):
++            self.kept_experts = _load_kept_experts(
++                kept_path,
++                self.num_dspark_layers,
++                config.n_routed_experts,
++                config.num_experts_per_tok,
++            )
++            logger.info(
++                "DSpark drafter keeps %d of %d routed experts per layer (%s)",
++                len(self.kept_experts[0]),
++                config.n_routed_experts,
++                kept_path,
++            )
+         self.layers = nn.ModuleList(
+             [
+                 DeepseekV4DecoderLayer(
+                     current_vllm_config,
+                     prefix=maybe_prefix(prefix, f"layers.{self.num_hidden_layers + i}"),
+                     topk_indices_buffer=self.topk_indices_buffer,
++                    n_routed_experts=(
++                        len(self.kept_experts[i]) if self.kept_experts else None
++                    ),
+                 )
+                 for i in range(self.num_dspark_layers)
+             ]
+         )
++        if capture_dir := os.environ.get(_CAPTURE_DIR_ENV):
++            if not current_vllm_config.model_config.enforce_eager:
++                raise ValueError(
++                    f"{_CAPTURE_DIR_ENV} requires --enforce-eager: "
++                    "replayed graphs bypass the capture hook."
++                )
++            capture = _RouterCapture(
++                capture_dir, int(os.environ.get(_CAPTURE_TOKENS_ENV, "32768"))
++            )
++            for i, layer in enumerate(self.layers):
++                capture.wrap(i, layer.ffn)
+         self.context_wkv_proj = MergedColumnParallelLinear(
+             config.hidden_size,
+             [config.head_dim] * self.num_dspark_layers,
+@@ -449,17 +632,17 @@ class DSparkDeepseekV4ForCausalLM(nn.Module, DeepseekV4MixtureOfExperts):
+         """
+         first_layer = self.model.layers[0]
+         use_native_mega_moe = first_layer.ffn.use_native_mega_moe
++        # The built MoE's count: fewer than the config's when experts are pruned.
++        num_experts = first_layer.ffn.n_routed_experts
+         if use_native_mega_moe:
+-            expert_mapping = make_deepseek_v4_expert_params_mapping(
+-                self.config.n_routed_experts
+-            )
++            expert_mapping = make_deepseek_v4_expert_params_mapping(num_experts)
+         else:
+             expert_mapping = fused_moe_make_expert_params_mapping(
+                 self,
+                 ckpt_gate_proj_name="w1",
+                 ckpt_down_proj_name="w2",
+                 ckpt_up_proj_name="w3",
+-                num_experts=self.config.n_routed_experts,
++                num_experts=num_experts,
+                 num_redundant_experts=first_layer.ffn.n_redundant_experts,
+             )
+         expert_scale_suffix = (
+@@ -481,6 +664,8 @@ class DSparkDeepseekV4ForCausalLM(nn.Module, DeepseekV4MixtureOfExperts):
+         loaded_confidence_head = False
+ 
+         weights = _duplicate_context_wkv_weights(weights, len(self.model.layers))
++        if self.model.kept_experts is not None:
++            weights = _select_kept_experts(weights, self.model.kept_experts)
+         for name, loaded_weight in weights:
+             mapped = self._remap_dspark_name(name)
+             if mapped is None:
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index a6ec62f..b62aece 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -589,6 +589,7 @@ class DeepseekV4DecoderLayer(nn.Module):
+         prefix,
+         topk_indices_buffer: torch.Tensor | None = None,
+         aux_stream_list: list[torch.cuda.Stream] | None = None,
++        n_routed_experts: int | None = None,
+     ):
+         super().__init__()
+ 
+@@ -610,6 +611,7 @@ class DeepseekV4DecoderLayer(nn.Module):
+             prefix=f"{prefix}.ffn",
+             use_sequence_parallel=self.use_sequence_parallel,
+             num_hash_layers=config.mlp_layer_types.count("hash_moe"),
++            n_routed_experts=n_routed_experts,
+         )
+ 
+         self.attn_norm = RMSNorm(self.hidden_size, self.rms_norm_eps)
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index 8724faf..9038fe8 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -932,10 +932,17 @@ class Worker(WorkerBase):
+     @instrument(span_name="Warmup (GPU)")
+     def compile_or_warm_up_model(self) -> CompilationTimes:
+         if not self.use_v2_model_runner:
+-            return self._compile_or_warm_up_model()
+-        # MRV2 warmup forwards record expert load like real ones.
+-        with self.model_runner.eplb.suppress():  # type: ignore
+-            return self._compile_or_warm_up_model()
++            times = self._compile_or_warm_up_model()
++        else:
++            # MRV2 warmup forwards record expert load like real ones.
++            with self.model_runner.eplb.suppress():  # type: ignore
++                times = self._compile_or_warm_up_model()
++        # DSpark router calibration records only post-warmup forwards.
++        if os.environ.get("VLLM_PCAI_DSPARK_CAPTURE_DIR"):
++            from vllm.models.deepseek_v4.nvidia.dspark import arm_router_capture
++
++            arm_router_capture()
++        return times
+ 
+     def _compile_or_warm_up_model(self) -> CompilationTimes:
+         warmup_sizes: list[int] = []
