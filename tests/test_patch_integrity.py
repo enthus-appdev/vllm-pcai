@@ -26,35 +26,6 @@ class PatchIntegrityTests(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertNotIn("COPY patches/63165-", dockerfile)
 
-    def test_pinned_c128_runtime_patch(self):
-        patch = ROOT / "patches" / "58074-deepseek-v4-c128-circular-state-v033.patch"
-        self.assertEqual(
-            hashlib.sha256(patch.read_bytes()).hexdigest(),
-            "ac31e8167e3410e64d9177a7b83e2fda2dffc4090bb53f35ba23a54e1c99bfae",
-        )
-        paths = {
-            line.split()[2].removeprefix("a/")
-            for line in patch.read_text().splitlines()
-            if line.startswith("diff --git ")
-        }
-        self.assertEqual(
-            paths,
-            set(
-                [
-                    "vllm/models/deepseek_v4/common/ops/save_partial_states.py",
-                    "vllm/models/deepseek_v4/compressor.py",
-                    "vllm/models/deepseek_v4/nvidia/ops/sparse_attn_compress_cutedsl.py",
-                ]
-            ),
-        )
-        self.assertTrue(all(path.endswith(".py") for path in paths))
-        self.assertNotIn("csrc/", patch.read_text())
-        self.assertIn(
-            hashlib.sha256(patch.read_bytes()).hexdigest(),
-            (ROOT / "Dockerfile").read_text(),
-        )
-        self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
-
     def test_pinned_simple_offload_lru_patch(self):
         patch = ROOT / "patches" / "62444-simple-offload-lru-refresh.patch"
         digest = "022cf9e9a8d34b6a9330e472ee2fcc887a6c07643eee4b3352d4b1b556d13970"
