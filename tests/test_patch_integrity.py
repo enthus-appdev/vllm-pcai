@@ -142,6 +142,14 @@ class PatchIntegrityTests(unittest.TestCase):
         self.assertIn("pcai_embed_offload = pcai_embed_offload:register", eps)
         self.assertIn("COPY plugins/pcai_embed_offload ", (ROOT / "Dockerfile").read_text())
 
+    def test_pinned_backport_64229(self):
+        patch = ROOT / "patches" / "64229-lazy-swa-target.patch"
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), "28d09b44a855f84a0fd8c91c4c5fef8e6ecc9d3a7a46ce7be43032fb394ffefb")
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn("28d09b44a855f84a0fd8c91c4c5fef8e6ecc9d3a7a46ce7be43032fb394ffefb", dockerfile)
+        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
+        self.assertNotIn("tests/", patch.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

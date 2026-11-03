@@ -356,3 +356,13 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/prefix-fallback.patch
+
+# Count never-offloaded bounded-replay SWA blocks in SimpleCPUOffload's lazy free-block target.
+# vllm#64229, upstream main commit 77f58e530450 (after v0.33.0rc3); production files only.
+COPY patches/64229-lazy-swa-target.patch /tmp/backport.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "28d09b44a855f84a0fd8c91c4c5fef8e6ecc9d3a7a46ce7be43032fb394ffefb"; \
+    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/backport.patch; \
+    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    rm -f /tmp/backport.patch
