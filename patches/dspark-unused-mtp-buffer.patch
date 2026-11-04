@@ -1,0 +1,52 @@
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index a6ec62f..748b451 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -1,5 +1,6 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++import os
+ import typing
+ from collections.abc import Callable, Iterable
+ from itertools import islice
+@@ -92,6 +93,30 @@ from ..common.mm_preprocess import IMAGE_SENTINEL_BASE_ID
+ logger = init_logger(__name__)
+ 
+ 
++def _pcai_dspark_aux_only(vllm_config: VllmConfig) -> bool:
++    if os.environ.get("VLLM_PCAI_DSPARK_SKIP_MTP_BUFFER") != "1":
++        return False
++    spec = vllm_config.speculative_config
++    if (
++        spec is None
++        or not spec.use_dspark()
++        or not vllm_config.use_v2_model_runner
++        or vllm_config.parallel_config.pipeline_parallel_size != 1
++    ):
++        return False
++    from vllm.v1.worker.gpu.spec_decode.eagle.eagle3_utils import (
++        get_eagle3_aux_layers_from_config,
++    )
++
++    # Only omit the residual when the drafter is configured to consume aux
++    # states. MTP and missing/invalid aux configurations retain their fallback.
++    layers = get_eagle3_aux_layers_from_config(spec)
++    num_layers = vllm_config.model_config.hf_config.num_hidden_layers
++    return bool(layers) and all(
++        isinstance(layer, int) and 1 <= layer <= num_layers for layer in layers
++    )
++
++
+ class MegaGateRoutingMetadata(typing.NamedTuple):
+     safe_hash_input_ids: torch.Tensor | None
+     image_token_mask: torch.Tensor | None
+@@ -903,6 +928,9 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+         needs_mtp_hidden_states = spec_config is not None and (
+             spec_config.use_eagle() or spec_config.uses_draft_model()
+         )
++        if _pcai_dspark_aux_only(vllm_config):
++            needs_mtp_hidden_states = False
++            logger.info("PCAI DSpark auxiliary-only: skipping MTP residual buffer")
+         if get_pp_group().is_last_rank and needs_mtp_hidden_states:
+             self._mtp_hidden_buffer = torch.empty(
+                 vllm_config.scheduler_config.max_num_batched_tokens,
