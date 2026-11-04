@@ -385,3 +385,12 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$HUMMING_DIR" < /tmp/humming.patch; \
     find "$HUMMING_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/humming.patch
+
+# Opt-in DSpark aux-only residual-buffer omission; ordinary MTP keeps its buffer.
+COPY patches/dspark-unused-mtp-buffer.patch /tmp/dspark-buffer.patch
+RUN set -eux; \
+    test "$(sha256sum /tmp/dspark-buffer.patch | cut -d' ' -f1)" = "3316c0f12150d2322a4058c96d9cb11f690921c0d3ad55425d14c6e3e6103a78"; \
+    SITE="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/dspark-buffer.patch; \
+    python3 -m py_compile "$SITE/vllm/models/deepseek_v4/nvidia/model.py"; \
+    rm -f /tmp/dspark-buffer.patch
