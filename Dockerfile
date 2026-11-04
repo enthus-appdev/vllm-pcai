@@ -394,3 +394,13 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/dspark-buffer.patch; \
     python3 -m py_compile "$SITE/vllm/models/deepseek_v4/nvidia/model.py"; \
     rm -f /tmp/dspark-buffer.patch
+
+# Packed scales also require native launcher metadata and half-width validation.
+COPY patches/humming-packed-bs-launcher.patch /tmp/humming-launcher.patch
+COPY tools/build_humming_launcher.py /tmp/build_humming_launcher.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/humming-launcher.patch | cut -d' ' -f1)" = "4c0ca83172f59a0953f2ad2d2b699a486167679dd384d8c99f65d9324d0e1ae0"; \
+    HUMMING_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("humming").origin))')"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$HUMMING_DIR" < /tmp/humming-launcher.patch; \
+    MAX_JOBS=1 OMP_NUM_THREADS=1 python3 /tmp/build_humming_launcher.py; \
+    rm -f /tmp/humming-launcher.patch /tmp/build_humming_launcher.py
