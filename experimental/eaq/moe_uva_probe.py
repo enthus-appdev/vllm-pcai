@@ -60,6 +60,14 @@ def run(case, placement, tokens, routing):
             "checksum": float(out.double().sum().item())}
 
 
+def close(a, b, rel=1e-6):
+    """Host and device runs agree: same finiteness, sums within rel (kernels may reduce in a different order)."""
+    a, b = json.loads(a), json.loads(b)
+    if a["finite"] != b["finite"]:
+        return False
+    return all(abs(a[k] - b[k]) <= rel * max(abs(a[k]), abs(b[k]), 1e-12) for k in ("absmax", "checksum"))
+
+
 def main():
     if len(sys.argv) > 1:
         case, placement, tokens, routing = sys.argv[1:5]
@@ -77,7 +85,7 @@ def main():
                 detail = p.stdout.strip().splitlines()[-1] if ok else (p.stderr.strip().splitlines() or ["?"])[-1]
                 results[key] = (ok, detail)
                 print(json.dumps({"run": key, "ok": ok, "result": detail[:400]}), flush=True)
-    same = all(results[k][1] == results[k.replace(" host", " device")][1]
+    same = all(close(results[k][1], results[k.replace(" host", " device")][1])
                for k in results if k.endswith(" host") and results[k][0] and results[k.replace(" host", " device")][0])
     print(json.dumps({"verdict": {"all_ok": all(v[0] for v in results.values()),
                                   "host_failures": [k for k, v in results.items() if k.endswith("host") and not v[0]],

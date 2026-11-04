@@ -5,7 +5,8 @@ K fix: for a layer whose experts share one K, vllm-exl3 sets the fused launch's
 EAQ, declares no global ``bits``). Its physical-K compat corrects ``_exl3_k`` but
 not the tuple, so the kernel walks K3 trellises with a K4 stride and reads past
 each expert, an illegal access once the experts live in host memory. After the
-state is built, both are set from the loaded trellis widths.
+state is built, the tuple is set from the loaded trellis widths; ``_exl3_k`` too when
+all three projections share one K (it is only meaningful for uniform layers).
 
 Checks (PCAI_EXL3_DIAG=1): every trellis/suh/svh pointer is looked up with the
 CUDA driver: memory type and the allocation it falls in. Pageable host pointers
@@ -15,6 +16,8 @@ expert. One summary line per layer is logged.
 from __future__ import annotations
 
 import ctypes
+
+from .compat import check_vllm, require
 
 CU_POINTER_ATTRIBUTE_MEMORY_TYPE = 2
 CU_POINTER_ATTRIBUTE_RANGE_START_ADDR = 11
@@ -33,15 +36,20 @@ def _driver():
 
 
 def pointer_info(ptr: int):
-    """(memory type, range start, range size), or (None, 0, 0) for memory CUDA does not know."""
+    """(memory type, range start, range size).
+
+    Memory type is None for memory CUDA does not know; start and size are None when the
+    driver cannot report the allocation range.
+    """
     cuda = _driver()
     kind = ctypes.c_uint32()
     start = ctypes.c_uint64()
     size = ctypes.c_size_t()
     if cuda.cuPointerGetAttribute(ctypes.byref(kind), CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr):
-        return None, 0, 0
-    cuda.cuPointerGetAttribute(ctypes.byref(start), CU_POINTER_ATTRIBUTE_RANGE_START_ADDR, ptr)
-    cuda.cuPointerGetAttribute(ctypes.byref(size), CU_POINTER_ATTRIBUTE_RANGE_SIZE, ptr)
+        return None, None, None
+    if (cuda.cuPointerGetAttribute(ctypes.byref(start), CU_POINTER_ATTRIBUTE_RANGE_START_ADDR, ptr)
+            or cuda.cuPointerGetAttribute(ctypes.byref(size), CU_POINTER_ATTRIBUTE_RANGE_SIZE, ptr)):
+        return MEMORY_TYPES.get(kind.value, str(kind.value)), None, None
     return MEMORY_TYPES.get(kind.value, str(kind.value)), start.value, size.value
 
 
@@ -61,6 +69,8 @@ def check_layer(layer, inners):
                 kinds[(attr, kind)] = kinds.get((attr, kind), 0) + 1
                 if kind is None:
                     problems.append(f"expert {e} {proj}.{attr}: pointer unknown to CUDA (pageable host?)")
+                elif start is None:
+                    problems.append(f"expert {e} {proj}.{attr}: allocation range unavailable")
                 elif ptr + nbytes > start + size:
                     problems.append(f"expert {e} {proj}.{attr}: {nbytes} bytes overrun allocation by "
                                     f"{ptr + nbytes - start - size}")
@@ -95,9 +105,11 @@ def install(diag=False):
     from vllm_exl3 import exl3 as plugin
 
     logger = init_logger("vllm." + __name__)
-    original = plugin.build_exl3_fused_state
+    original = getattr(plugin, "build_exl3_fused_state", None)
     if getattr(original, "_pcai_wrapped", False):
         return
+    check_vllm()
+    require(plugin, "build_exl3_fused_state", ("layer", "inners"))
 
     def build_exl3_fused_state(layer, inners):
         result = original(layer, inners)

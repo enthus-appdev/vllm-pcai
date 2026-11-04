@@ -32,11 +32,11 @@ def table_file(root, heads):
         {'weight_map': {key: 'table.safetensors' for key in meta}}))
 
 
-def fixture(root, heads, rank, eager=True):
+def fixture(root, heads, rank, eager=True, sequence_parallel=False, max_tokens=2):
     cfg = types.SimpleNamespace(
         model_config=types.SimpleNamespace(enforce_eager=eager),
         parallel_config=types.SimpleNamespace(data_parallel_size=1),
-        scheduler_config=types.SimpleNamespace(max_num_batched_tokens=2),
+        scheduler_config=types.SimpleNamespace(max_num_batched_tokens=max_tokens),
         engram_config=types.SimpleNamespace(cpu_offload=False, dp_shared_memory=False, use_thp=False),
     )
     ready = False
@@ -52,8 +52,11 @@ def fixture(root, heads, rank, eager=True):
             super().__init__()
             self.embed_tokens = self._create_embedding(layout, layer_hash_index)
 
+        def _create_embedding(self, layout, layer_hash_index):
+            raise AssertionError('stock embedding must be replaced')
+
     fake = {
-        'vllm': types.ModuleType('vllm'),
+        'vllm': types.SimpleNamespace(__version__='0.32.0'),
         'vllm.config': types.SimpleNamespace(get_current_vllm_config=current),
         'vllm.distributed': types.SimpleNamespace(
             get_tensor_model_parallel_rank=lambda: rank,
@@ -70,7 +73,7 @@ def fixture(root, heads, rank, eager=True):
         install()
         install()  # idempotent
         ready = True
-        model = Engram(None, None, layout, 0, False, 'model.layers.1.engram')
+        model = Engram(None, None, layout, 0, sequence_parallel, 'model.layers.1.engram')
     return model.embed_tokens
 
 
@@ -119,6 +122,17 @@ class RuntimeTest(unittest.TestCase):
     def test_reject_graph_config(self):
         with self.assertRaisesRegex(RuntimeError, 'enforce-eager'):
             fixture(self.root, (11, 13, 17, 19), 0, eager=False)
+
+    def test_reject_sequence_parallel(self):
+        with self.assertRaisesRegex(RuntimeError, 'sequence parallelism'):
+            fixture(self.root, (11, 13, 17, 19), 0, sequence_parallel=True)
+
+    def test_unset_token_cap(self):
+        emb = fixture(self.root, (11, 13, 17, 19), 0, max_tokens=None)
+        try:
+            emb.lookup(torch.zeros(3, 4, dtype=torch.long), torch.empty(3, 2, 32, dtype=torch.bfloat16))
+        finally:
+            self.close(emb)
 
     def test_reject_foreign_row_and_capacity(self):
         emb = fixture(self.root, (11, 13, 17, 19), 0)

@@ -3,7 +3,11 @@ import functools
 import json
 import os
 
+from .compat import check_vllm, require
 from .rows import DirectTensor, head_partition, safe_path
+
+ENGRAM_INIT = ("self", "config", "quant_config", "layout", "layer_hash_index",
+               "use_sequence_parallel", "prefix", "prefetch_stream")
 
 
 def install():
@@ -19,6 +23,9 @@ def install():
 
     if getattr(impl.Engram, "_pcai_disk_installed", False):
         return
+    check_vllm()
+    require(impl.Engram, "__init__", ENGRAM_INIT)
+    require(impl.Engram, "_create_embedding", ("self", "layout", "layer_hash_index"))
     # Plugin registration precedes current-config context; defer checks to construction.
 
     class DiskEmbedding(nn.Module):
@@ -50,7 +57,8 @@ def install():
                  heads, get_tensor_model_parallel_rank(), self.tp_size)
             self.num_embeddings = layout.num_embeddings[hash_index]
             self.part_num_embeddings = self.vocab_end_idx - self.vocab_start_idx
-            self.max_tokens = cfg.scheduler_config.max_num_batched_tokens
+            # Unset means no scheduler cap; the lookup then only bounds memory by the batch itself.
+            self.max_tokens = cfg.scheduler_config.max_num_batched_tokens or 2**31
             root = os.environ["PCAI_ENGRAM_DIR"]
             index = json.loads(safe_path(root, "model.safetensors.index.json").read_text())["weight_map"]
             raw = prefix.removeprefix("language_model.").removeprefix("model.") + ".embed"
@@ -131,6 +139,9 @@ def install():
     @functools.wraps(original_init)
     def init(self, config, quant_config, layout, layer_hash_index,
              use_sequence_parallel, prefix, prefetch_stream=None):
+        if use_sequence_parallel:
+            # forward() implements only the TP all-gather, not the sequence-parallel collective.
+            raise RuntimeError("disk Engram does not support sequence parallelism")
         self._pcai_table_prefix = prefix
         original_init(self, config, quant_config, layout, layer_hash_index,
                       use_sequence_parallel, prefix, prefetch_stream)
