@@ -1,0 +1,67 @@
+diff --git a/csrc/launcher/elf.h b/csrc/launcher/elf.h
+index ae44ef7..04a1828 100644
+--- a/csrc/launcher/elf.h
++++ b/csrc/launcher/elf.h
+@@ -100,6 +100,10 @@ public:
+     return getUint32(name) > 0;
+   }
+ 
++  bool getBoolOrDefault(const std::string &name, bool fallback) {
++    return symbolOffsets.count(name) ? getBool(name) : fallback;
++  }
++
+   const std::vector<std::string> &getKernelNames() const {
+     return kernelNames;
+   }
+diff --git a/csrc/launcher/launcher.cpp b/csrc/launcher/launcher.cpp
+index ae70040..53f93b8 100644
+--- a/csrc/launcher/launcher.cpp
++++ b/csrc/launcher/launcher.cpp
+@@ -338,7 +338,8 @@ std::tuple<int64_t, std::string> register_kernel(const std::string &cubin_path)
+       reader.getBool("USE_RAW_WEIGHT"),
+       reader.getBool("USE_FLAT_WEIGHT"),
+       reader.getBool("USE_LDMATRIX_DEQUANT"),
+-      reader.getBool("USE_BLOCK_SCALED_MMA")};
++      reader.getBool("USE_BLOCK_SCALED_MMA"),
++      reader.getBoolOrDefault("USE_PACKED_BS", false)};
+ 
+   std::unique_lock lock(g_kernel_mutex);
+   auto path_it = g_path_ids.find(cubin_path);
+diff --git a/csrc/launcher/tensor.h b/csrc/launcher/tensor.h
+index ee82dda..f1cdde9 100644
+--- a/csrc/launcher/tensor.h
++++ b/csrc/launcher/tensor.h
+@@ -160,6 +160,12 @@ inline void check_tensor_as2(std::optional<Tensor> &tensor, KernelData &kernel_d
+ };
+ 
+ inline void check_tensor_bs(Tensor &tensor, KernelData &kernel_data, int64_t dev) {
++  if (kernel_data.use_packed_bs) {
++    ASSERT_CHECK(kernel_data.use_packed_k_layout && kernel_data.is_group_weight_scale &&
++        !kernel_data.use_block_scaled_mma && !kernel_data.use_tma_bs &&
++        kernel_data.problem_shape_n % 32 == 0,
++        "packed BS requires packed-K group scales, cp.async and aligned N");
++  }
+   if (kernel_data.is_tensor_weight_scale) {
+     std::vector<int64_t> expected_shape = {kernel_data.gemm_type_id != 0 ? kernel_data.num_experts : 1};
+     check_tensor_common(tensor, "bs", dev, ScalarType::Float, expected_shape);
+@@ -192,7 +198,7 @@ inline void check_tensor_bs(Tensor &tensor, KernelData &kernel_data, int64_t dev
+     if (kernel_data.is_block_weight_scale) {
+       expected_shape.push_back(num_groups_n);
+     } else {
+-      expected_shape.push_back(kernel_data.problem_shape_n);
++      expected_shape.push_back(kernel_data.problem_shape_n / (kernel_data.use_packed_bs ? 2 : 1));
+     }
+   }
+   check_tensor_common(tensor, "bs", dev, expected_dtype, expected_shape);
+diff --git a/csrc/launcher/utils.h b/csrc/launcher/utils.h
+index bd326d5..3c4506a 100644
+--- a/csrc/launcher/utils.h
++++ b/csrc/launcher/utils.h
+@@ -182,6 +182,7 @@ struct KernelData {
+   bool use_flat_weight;
+   bool use_ldmatrix_dequant;
+   bool use_block_scaled_mma;
++  bool use_packed_bs;
+ };
+ 
+ struct LoadedKernel {

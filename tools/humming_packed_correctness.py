@@ -117,6 +117,18 @@ def main():
                             in enumerate(zip(args.rows, compiled, tunings))})
         sizes = [r.kernel_tensors["weight_scale"].numel() for r in runners]
         assert sizes[0] == 2 * sizes[1], sizes
+        plain, packed_tensors = (r.kernel_tensors for r in runners)
+        assert plain.keys() == packed_tensors.keys(), "transformed tensor sets differ"
+        for name in plain.keys() - {"weight_scale"}:
+            assert torch.equal(plain[name], packed_tensors[name]), f"transformed {name} differs"
+        packed_bytes = packed_tensors["weight_scale"].view(torch.uint8)
+        expanded = torch.stack((packed_bytes & 15, packed_bytes >> 4), dim=-1).flatten(-2)
+        assert torch.equal(expanded, plain["weight_scale"].view(torch.uint8)), "scale bytes differ"
+        print(json.dumps({"phase": "transformed_tensor_equivalence", "projection": projection,
+              "non_scale_tensors_equal": True, "expanded_scale_bytes_equal": True,
+              "scale_bytes_unpacked": sizes[0], "scale_bytes_packed": sizes[1],
+              "unpacked_scale_shape": list(plain["weight_scale"].shape),
+              "packed_scale_shape": list(packed_tensors["weight_scale"].shape)}), flush=True)
         for m in args.rows:
             x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16)
             ids = torch.stack([torch.randperm(args.experts, device="cuda")[:6]
