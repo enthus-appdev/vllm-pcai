@@ -19,6 +19,8 @@ def main():
     parser.add_argument("--tp-rank", type=int, choices=(0, 1), default=0)
     parser.add_argument("--rows", type=int, nargs="+", default=[1, 8, 48, 256])
     parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--disable-stream-k", action="store_true",
+                        help="Controlled storage-kernel test only; NOT default-kernel qualification")
     args = parser.parse_args()
     if args.experts < 6 or args.experts > 256 or args.repeats < 1:
         parser.error("experts must be 6..256 and repeats positive")
@@ -35,6 +37,8 @@ def main():
     from humming import dtypes
     from humming.config import LayerConfig, ComputeConfig, GemmType
     from humming.testing.runner import KernelTestRunner, KernelTestCase
+    from humming.testing.tuning import generate_heuristics_configs
+    from humming.kernel.humming import HummingKernel
     from humming.transform import transform_humming_tensors
 
     torch.set_num_threads(2)
@@ -99,10 +103,18 @@ def main():
             # The fused transform modifies packed weights: never reuse its input.
             runner.kernel_tensors = transform_humming_tensors(
                 lc, {name: value.clone() for name, value in raw.items()})
-            groups = runner.prepare_kernels(tuple(args.rows))
-            assert len(groups) == 1
+            if not packed:
+                # Match BOTH paths' scheduling knobs; only packed scale storage differs.
+                tunings = generate_heuristics_configs(lc, cc, tuple(args.rows))
+                if args.disable_stream_k:
+                    tunings = [dict(t, use_stream_k=False) for t in tunings]
+            compiled = HummingKernel.prepare_kernels(
+                lc.to_str(), cc.to_str(), [(0, 1 << 30, t) for t in tunings], device=0,
+            ).reshape(-1, 4)
+            assert len(compiled) == len(args.rows)
             runners.append(runner)
-            kernels.append(groups[0][2])
+            kernels.append({m: [(row, tuning, i)] for i, (m, row, tuning)
+                            in enumerate(zip(args.rows, compiled, tunings))})
         sizes = [r.kernel_tensors["weight_scale"].numel() for r in runners]
         assert sizes[0] == 2 * sizes[1], sizes
         for m in args.rows:
@@ -116,11 +128,29 @@ def main():
                 kernel_config, tuning, _ = choices[m][0]
                 inputs, tensors, _ = runner._prepare_problem(m, quant, ids, tuning["block_shape"][0])
                 tensors |= {"inputs": inputs, "input_scale": scale, "input_scale_2": scale2}
-                out = runner._launch_kernel(m, tensors, kernel_config)
+                actual = HummingKernel._id2kernel[int(kernel_config[2])]
+                print(json.dumps({"phase": "launch", "projection": projection, "rows": m,
+                      "packed": runner.layer_config.use_packed_bs, "tuning": tuning,
+                      "compiled_use_stream_k": actual.use_stream_k,
+                      "disable_stream_k_requested": args.disable_stream_k}, default=str), flush=True)
+                if args.disable_stream_k:
+                    assert not actual.use_stream_k, "requested stream-K control was not honored"
+                live_out = runner._launch_kernel(m, tensors, kernel_config)
+                torch.cuda.synchronize()
+                out = live_out.clone()
                 again = runner._launch_kernel(m, tensors, kernel_config)
                 torch.cuda.synchronize()
-                assert torch.isfinite(out).all(), "nonfinite output"
-                assert torch.equal(out, again), "unmodified repeat is not bitwise stable; gate inconclusive"
+                assert live_out.data_ptr() != again.data_ptr(), "output allocations alias"
+                assert torch.equal(live_out, out), "second launch overwrote first output"
+                assert torch.isfinite(out).all() and torch.isfinite(again).all(), "nonfinite output"
+                different = out != again
+                print(json.dumps({"phase": "baseline_repeat", "projection": projection,
+                      "rows": m, "packed": runner.layer_config.use_packed_bs,
+                      "different_elements": different.sum().item(), "elements": out.numel(),
+                      "max_abs": (out.float() - again.float()).abs().max().item(),
+                      "first_output_ptr": live_out.data_ptr(), "second_output_ptr": again.data_ptr(),
+                      "first_output_unchanged": True}), flush=True)
+                assert torch.equal(out, again), "repeat unstable; no packed-format conclusion (inspect stream-K diagnostics)"
                 outputs.append(out)
                 # Capture each storage format independently after eager warmup.
                 graph = torch.cuda.CUDAGraph()
@@ -156,7 +186,9 @@ def main():
         del runners, kernels, raw
         torch.cuda.empty_cache()
     print("PACKED_SCALE_KERNEL_GATE_PASS " + json.dumps({"cases": len(report),
-          "experts": args.experts, "layer": args.layer, "tp_rank": args.tp_rank}), flush=True)
+          "experts": args.experts, "layer": args.layer, "tp_rank": args.tp_rank,
+          "stream_k_disabled": args.disable_stream_k,
+          "scope": "controlled_storage_kernel_only" if args.disable_stream_k else "heuristic_subset"}), flush=True)
 
 
 if __name__ == "__main__":
