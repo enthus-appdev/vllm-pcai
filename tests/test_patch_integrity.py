@@ -14,8 +14,8 @@ class PatchIntegrityTests(unittest.TestCase):
     def test_audited_base_and_patch_inventory(self):
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn(
-            "FROM vllm/vllm-openai:v0.33.0@sha256:"
-            "d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e",
+            "FROM vllm/vllm-openai:v0.34.0@sha256:"
+            "20fdb089454afbb324efa4110a2c025ff7b27cc1a086e07aa580b18df8ad1ce1",
             dockerfile,
         )
         copied = re.findall(r"^COPY patches/(\S+) ", dockerfile, re.MULTILINE)
@@ -55,20 +55,6 @@ class PatchIntegrityTests(unittest.TestCase):
         )
         self.assertIn(f"COPY patches/{patch.name} ", (ROOT / "Dockerfile").read_text())
 
-    def test_pinned_simple_offload_lru_patch(self):
-        patch = ROOT / "patches" / "62444-simple-offload-lru-refresh.patch"
-        digest = "022cf9e9a8d34b6a9330e472ee2fcc887a6c07643eee4b3352d4b1b556d13970"
-        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
-        paths = {
-            line.split()[2].removeprefix("a/")
-            for line in patch.read_text().splitlines()
-            if line.startswith("diff --git ")
-        }
-        self.assertEqual(paths, {"vllm/v1/simple_kv_offload/manager.py"})
-        dockerfile = (ROOT / "Dockerfile").read_text()
-        self.assertIn(digest, dockerfile)
-        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
-
     def test_pinned_swa_admission_patch(self):
         patch = ROOT / "patches" / "60045-swa-admission-held-blocks.patch"
         digest = "d2e0787a02594e4582ebdad78c92d928fd3f19dfc3bed6d98b192f6cc4c729a4"
@@ -79,17 +65,6 @@ class PatchIntegrityTests(unittest.TestCase):
             if line.startswith("diff --git ")
         }
         self.assertEqual(paths, {"vllm/v1/core/single_type_kv_cache_manager.py"})
-        dockerfile = (ROOT / "Dockerfile").read_text()
-        self.assertIn(digest, dockerfile)
-        self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
-
-    def test_pinned_stability_bundle(self):
-        patch = ROOT / "patches/63427-nested-weak-ref-tensors-v033.patch"
-        digest = "98d005b2c87c9942b01257ce7f2105519b616f7b7ecfc4016610c6e30ae7849d"
-        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), digest)
-        paths = {line.split()[2].removeprefix("a/") for line in patch.read_text().splitlines()
-                 if line.startswith("diff --git ")}
-        self.assertEqual(paths, {"vllm/utils/torch_utils.py"})
         dockerfile = (ROOT / "Dockerfile").read_text()
         self.assertIn(digest, dockerfile)
         self.assertIn(f"COPY patches/{patch.name} ", dockerfile)
