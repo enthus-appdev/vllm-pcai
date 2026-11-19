@@ -1,9 +1,7 @@
 # PCAI can't mount volumes, so the chat templates are baked in. Details: README.
 #
-# vLLM v0.33.0 (commit 4ba787ec9959, also tagged v0.33.0rc3), pinned by digest. Release
-# branches can diverge, so a newer tag is not a strict superset of an older one: the checks
-# below verify the behavior this image depends on.
-FROM vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
+# vLLM v0.34.0 (commit 62d4bc3c7e33), pinned by digest.
+FROM vllm/vllm-openai:v0.34.0@sha256:20fdb089454afbb324efa4110a2c025ff7b27cc1a086e07aa580b18df8ad1ce1
 
 # jq for the pcai-inference chart's pre-start init scripts: the storage check and
 # file staging run in this image as POSIX sh + jq (no Python in the chart).
@@ -104,19 +102,17 @@ assert "skip_tool_parsing" not in branch.group(0), branch.group(0)
 print("EOS-in-reasoning fix (vllm#48748) present upstream")
 PY
 
-# Qwen's DFlash drafter mixes sliding + full attention, which only the V2 model runner can do
-# (multiple KV groups). vLLM auto-forces V2 for it via this helper, which is why no serve-arg or
-# env change is needed; a base that loses it would leave V1 selected and fail at boot instead.
-# Tripwire: does NOT prove acceptance — a mis-wired drafter still serves CORRECT text, just slower
-# than no speculation at all. Verify on Grafana acceptance (~28-30%), not on output looking fine.
+# Qwen's DFlash drafter needs mixed full/SWA cache support and a draft KV dtype override.
+# v0.34.0 uses the GPU V2 runner; the old per-model V2 selection helper is gone.
 RUN python3 - <<'PY'
-from vllm.config.vllm import VllmConfig
 from vllm.config.speculative import SpeculativeConfig
-assert hasattr(VllmConfig, "_dflash_needs_multi_kv_group")
-# #48787: lets the target run fp8 KV while the drafter stays BF16 (untested here, see docs).
-assert "kv_cache_dtype" in SpeculativeConfig.__annotations__, SpeculativeConfig.__annotations__
-import vllm.model_executor.models.qwen3_dflash  # noqa: F401
-print("hybrid-SWA DFlash prereqs OK")
+from vllm.model_executor.models.qwen3_dflash import dflash_has_any_sliding
+from vllm.v1.worker.gpu.spec_decode.dflash.config import DFlashSpeculatorConfig
+
+assert "kv_cache_dtype" in SpeculativeConfig.__annotations__
+assert DFlashSpeculatorConfig.base_method == "dflash"
+assert callable(dflash_has_any_sliding)
+print("hybrid-SWA DFlash prerequisites OK")
 PY
 
 # vllm#52923 prevents OffloadingConnector store scheduling from outrunning either allocated GPU
@@ -143,53 +139,31 @@ import vllm.models.deepseek_v4.nvidia.dspark  # noqa: F401
 import vllm.v1.worker.gpu.spec_decode.dspark.speculator  # noqa: F401
 print("DSpark OK:", vllm.__version__)
 PY
-# With --load-format runai_streamer and an s3:// model, ModelConfig rewrites `model` to a local
-# config-only cache dir (json/py/model, never safetensors) and keeps the URL in `model_weights`.
-# Drafters that live INSIDE the target checkpoint (DSpark, MTP) are built from the rewritten path
-# and inherit an empty `model_weights`, so the drafter load dies with "Cannot find any safetensors
-# model weights" AFTER the ~16 min target stream. Upstream vllm#48023 (fixes vllm#42060); vendored
-# because it is still open. Drop once the base carries it — the apply below will fail loudly.
-COPY patches/48023-spec-draft-inherit-model-weights-v033.patch /tmp/spec-draft-weights.patch
+# Preserve the object-storage weight URL for a drafter sharing the target checkpoint
+# (vllm#48023). v0.34.0 handles implicit MTP upstream but still defaults DeepSeek
+# DSpark to the rewritten config-only path. The common constructor keeps the guard
+# for implicit DSpark and explicit shared-path drafts without clobbering other drafts.
+COPY patches/48023-spec-draft-inherit-model-weights-v034.patch /tmp/spec-draft-weights.patch
 RUN set -eux; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/spec-draft-weights.patch; \
-    else patch -p1 -d "$SITE" < /tmp/spec-draft-weights.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
+    test "$(sha256sum /tmp/spec-draft-weights.patch | cut -d' ' -f1)" = "bcb475b185aae8c032302b8270087be4cdf9ef014dde27008f97929d43551f14"; \
+    SITE="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/spec-draft-weights.patch; \
     rm -f /tmp/spec-draft-weights.patch
 
-# Build-time tripwire: behavioral (pure config, no GPU/network). Asserts BOTH directions — a shared
-# checkpoint inherits the object-storage URL, and a drafter that resolved its own is not clobbered.
 RUN python3 - <<'PY'
-from unittest.mock import MagicMock, patch
-from vllm.config import ParallelConfig
-from vllm.config.speculative import SpeculativeConfig
+from types import SimpleNamespace as Config
+from vllm.v1.worker.gpu.spec_decode.speculator_config import _inherit_shared_draft_weights
 
-S3, CACHE = "s3://llm-model-cache-std-01/DeepSeek-V4-Flash-0731/", "/root/.cache/vllm/assets/model_streamer/abcd1234"
-
-def build(draft_weights, draft_model):
-    with patch("vllm.config.speculative.ModelConfig") as mc:
-        d = MagicMock(); d.model = draft_model; d.model_weights = draft_weights
-        d.hf_config.model_type = "deepseek_mtp"; d.hf_config.n_predict = None; d.max_model_len = 4096
-        d.hf_config.max_position_embeddings = 4096
-        mc.return_value = d
-        t = MagicMock(); t.model = CACHE; t.model_weights = S3
-        t.using_transformers_backend.return_value = False
-        t.hf_text_config.model_type = "deepseek_v3"; t.quantization = None; t.max_model_len = 4096
-        try:
-            SpeculativeConfig(method="mtp", num_speculative_tokens=1,
-                              target_model_config=t, target_parallel_config=ParallelConfig())
-        except Exception as e:
-            # These mocks track SpeculativeConfig.__post_init__; a base bump can require more
-            # attributes. That is a stale-tripwire failure, NOT evidence the patch is unneeded.
-            import traceback
-            traceback.print_exc()
-            raise SystemExit(f"tripwire mocks no longer match this base ({type(e).__name__}: {e})"
-                             " — update the mocks, do NOT drop the patch") from e
-        return d.model_weights
-
-assert build("", CACHE) == S3, "shared-checkpoint drafter did not inherit model_weights"
-assert build("s3://other/drafter/", CACHE) == "s3://other/drafter/", "clobbered a drafter's own weights"
-print("spec-draft model_weights inheritance OK")
+target = Config(model="/config-only", model_weights="s3://example/target/")
+for path, weights, expected in (
+    (target.model, "", target.model_weights),
+    (target.model, "s3://example/drafter/", "s3://example/drafter/"),
+    ("/other", "", ""),
+):
+    draft = Config(model=path, model_weights=weights)
+    _inherit_shared_draft_weights(target, draft)
+    assert draft.model_weights == expected
+print("shared drafter retains target weight source without clobbering independent drafts")
 PY
 
 # Make worker_response_mq (one per worker) honour VLLM_MQ_MAX_CHUNK_BYTES_MB like rpc_broadcast_mq,
@@ -276,9 +250,8 @@ PY
 
 # CUDA V4 C128 history uses one bounded ring per request, including draft lookahead.
 # Rebased from vllm#58074 head f8bb0ba871415a779de33fadcb40ab2ba5acbc09;
-# preserve v0.33's compressor method split and stream-capture guard.
-# Python CuTe DSL/Triton JIT only; no compiled csrc changes or weight requantization.
-# GPU correctness remains unqualified; this image is experimental.
+# preserve the compressor method split and stream-capture guard.
+# Python CuTe DSL/Triton JIT only. Requalify the carry on GPU after a base update.
 COPY patches/58074-deepseek-v4-c128-circular-state-v033.patch /tmp/runtime-fix.patch
 RUN set -eux; \
     test "$(sha256sum /tmp/runtime-fix.patch | cut -d' ' -f1)" = "ac31e8167e3410e64d9177a7b83e2fda2dffc4090bb53f35ba23a54e1c99bfae"; \
@@ -287,18 +260,6 @@ RUN set -eux; \
     else patch -p1 -d "$SITE" < /tmp/runtime-fix.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/runtime-fix.patch
-
-# Refresh eager CPU-tier recency for prefixes served from the GPU cache.
-# vllm#62444 production-only diff, head a7f3bd29157fb6c96a1eff083cf8fc14136be624.
-# GPU serving remains unqualified.
-COPY patches/62444-simple-offload-lru-refresh.patch /tmp/offload-fix.patch
-RUN set -eux; \
-    test "$(sha256sum /tmp/offload-fix.patch | cut -d' ' -f1)" = "022cf9e9a8d34b6a9330e472ee2fcc887a6c07643eee4b3352d4b1b556d13970"; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/offload-fix.patch; \
-    else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/offload-fix.patch
 
 # Count physical held blocks, not null-padded table positions, for SWA admission.
 # vllm#60045 production-only diff, head 843db1462a066076d407bb628098140da4455be5.
@@ -311,16 +272,6 @@ RUN set -eux; \
     else patch -p1 -d "$SITE" < /tmp/offload-fix.patch; fi; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/offload-fix.patch
-
-# Never split a multimodal item when a prefix-cache hit ends inside it (DeepSeek V4 Vision forces disable_chunked_mm_input).
-# vllm#65271, upstream main commit 65a904538d294d9fafc044b164104b2f5f9a9391 (after v0.33.0); production files only.
-COPY patches/65271-mm-prefix-split.patch /tmp/backport.patch
-RUN set -eux; \
-    test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "8bfa08f8b8e72762f9b976f4adfccf3cd881ea7ee71bf020a15273853ce14c89"; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/backport.patch; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/backport.patch
 
 # Order SimpleCPUOffload loads after queued compute reads of the destination blocks.
 # Needed for async scheduling with the host KV tier (speculative steps still reading a block).
@@ -335,16 +286,6 @@ RUN set -eux; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/offload-fix.patch
 
-# Allocate the SimpleCPUOffload host KV pool without zero-filling it (faster boot of large host tiers).
-# vllm#64345, upstream main commit 3c39dda2a5da9e4b71b5eb61db686bf669374569 (after v0.33.0); production files only.
-COPY patches/64345-host-pool-no-zero-fill.patch /tmp/backport.patch
-RUN set -eux; \
-    test "$(sha256sum /tmp/backport.patch | cut -d' ' -f1)" = "35efc65ae158e1fafb7f59e799b26fcee62f949bd7164752702d1c8cd9081989"; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/backport.patch; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/backport.patch
-
 # Plugin: '--cpu-offload-params ... embed_tokens' puts DeepSeek V4's embedding table in pinned
 # host memory through vLLM's UVA offloader (vLLM offloads layers and towers, never the embedding).
 # Inactive unless that parameter is requested.
@@ -354,17 +295,6 @@ RUN set -eux; \
     cp -r /tmp/pcai_embed_offload/. "$SITE/"; \
     rm -rf /tmp/pcai_embed_offload
 
-# #54163, #60553 and #59030 are upstream; only #63427 (nested weak refs)
-# remains patched.
-COPY patches/63427-nested-weak-ref-tensors-v033.patch /tmp/stability.patch
-RUN set -eux; \
-    test "$(sha256sum /tmp/stability.patch | cut -d' ' -f1)" = "98d005b2c87c9942b01257ce7f2105519b616f7b7ecfc4016610c6e30ae7849d"; \
-    VLLM_DIR="$(python3 -c 'import importlib.util, os; print(os.path.dirname(importlib.util.find_spec("vllm").origin))')"; SITE="$(dirname "$VLLM_DIR")"; \
-    if command -v git >/dev/null 2>&1; then git -C "$SITE" apply -p1 --verbose /tmp/stability.patch; \
-    else patch -p1 -d "$SITE" < /tmp/stability.patch; fi; \
-    find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
-    rm -f /tmp/stability.patch
-
 # C1c: retain one earlier semantic SWA boundary without restoring block dropping.
 COPY patches/dspark-swa-prefix-fallback-v033.patch /tmp/prefix-fallback.patch
 RUN set -eux; \
@@ -373,6 +303,19 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/prefix-fallback.patch; \
     find "$VLLM_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/prefix-fallback.patch
+
+# The base now skips the residual allocation for DSpark while retaining MTP.
+RUN python3 - <<'PY'
+from types import SimpleNamespace
+from vllm.models.deepseek_v4.common.spec_decode import needs_mtp_hidden_buffer
+
+for dspark, expected in ((True, False), (False, True)):
+    config = SimpleNamespace(use_dspark=lambda: dspark, use_eagle=lambda: True,
+                             uses_draft_model=lambda: False)
+    assert needs_mtp_hidden_buffer(config) is expected
+assert not needs_mtp_hidden_buffer(None)
+print("stock DeepSeek DSpark/MTP residual allocation policy OK")
+PY
 
 # Humming 0.1.19: store fused-E8M0 MoE scales as 4-bit nibbles (two per byte). On SM90 with
 # FP8 activations the rebased scales are 1..12, so this is lossless and halves resident
@@ -385,15 +328,6 @@ RUN set -eux; \
     patch --batch --forward --fuzz=0 -p1 -d "$HUMMING_DIR" < /tmp/humming.patch; \
     find "$HUMMING_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/humming.patch
-
-# Opt-in DSpark aux-only residual-buffer omission; ordinary MTP keeps its buffer.
-COPY patches/dspark-unused-mtp-buffer.patch /tmp/dspark-buffer.patch
-RUN set -eux; \
-    test "$(sha256sum /tmp/dspark-buffer.patch | cut -d' ' -f1)" = "3316c0f12150d2322a4058c96d9cb11f690921c0d3ad55425d14c6e3e6103a78"; \
-    SITE="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
-    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/dspark-buffer.patch; \
-    python3 -m py_compile "$SITE/vllm/models/deepseek_v4/nvidia/model.py"; \
-    rm -f /tmp/dspark-buffer.patch
 
 # Packed scales also require native launcher metadata and half-width validation.
 COPY patches/humming-packed-bs-launcher.patch /tmp/humming-launcher.patch

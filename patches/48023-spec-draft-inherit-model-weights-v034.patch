@@ -1,0 +1,34 @@
+diff --git a/vllm/v1/worker/gpu/spec_decode/speculator_config.py b/vllm/v1/worker/gpu/spec_decode/speculator_config.py
+--- a/vllm/v1/worker/gpu/spec_decode/speculator_config.py
++++ b/vllm/v1/worker/gpu/spec_decode/speculator_config.py
+@@ -17,7 +17,7 @@
+ 
+ # vllm.config imports this module, so it imports vllm.config lazily.
+ if TYPE_CHECKING:
+-    from vllm.config import ParallelConfig, SpeculativeConfig
++    from vllm.config import ModelConfig, ParallelConfig, SpeculativeConfig
+ 
+ _PKG = "vllm.v1.worker.gpu.spec_decode"
+ 
+@@ -210,6 +210,7 @@
+             config_format=target.config_format,
+         )
+ 
++        _inherit_shared_draft_weights(target, spec.draft_model_config)
+         config_cls = _resolve_checkpoint_config_class(spec, cls)
+         if spec.method is None:
+             spec.method = config_cls.base_method  # type: ignore[assignment]
+@@ -388,6 +389,13 @@
+     return config_cls.specialize(spec_config)
+ 
+ 
++def _inherit_shared_draft_weights(target: "ModelConfig", draft: "ModelConfig") -> None:
++    # Shared drafts (e.g. DeepSeek DSpark) must use the original object-store
++    # weight URL, not the target's downloaded config-only directory.
++    if not draft.model_weights and target.model_weights and draft.model == target.model:
++        draft.model_weights = target.model_weights
++
++
+ def _get_draft_declared_config_class(
+     spec_config: "SpeculativeConfig",
+ ) -> type[SpeculatorConfig] | None:
