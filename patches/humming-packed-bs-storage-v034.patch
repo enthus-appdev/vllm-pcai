@@ -1,0 +1,48 @@
+diff --git a/vllm/model_executor/layers/quantization/utils/humming/moe.py b/vllm/model_executor/layers/quantization/utils/humming/moe.py
+--- a/vllm/model_executor/layers/quantization/utils/humming/moe.py
++++ b/vllm/model_executor/layers/quantization/utils/humming/moe.py
+@@ -424,7 +424,44 @@
+         if name in source_tensors:
+             tensors[name] = source_tensors[name]
+     _replace_layer_parameters(layer, sublayer_name, tensors)
++    _compact_packed_scale_storage(layer, sublayer_name, config, tensors)
+     return config
++
++
++def _compact_packed_scale_storage(
++    layer: "RoutedExperts",
++    sublayer_name: str,
++    config: "LayerConfig",
++    tensors: dict[str, torch.Tensor],
++) -> None:
++    """Keep packed scales on compact storage during cold/layerwise loading.
++
++    v0.34's replace_parameter copies smaller tensors into checkpoint-sized
++    storage. Preserve the Parameter object and its aliases, but not that spare
++    allocation. Direct reload needs the original capacity and is unsupported.
++    """
++    if not config.use_packed_bs:
++        return
++    from vllm.model_executor.model_loader.reload.direct import direct_reload_enabled
++
++    if direct_reload_enabled():
++        raise ValueError("PCAI packed Humming scales do not support direct weight reload")
++    packed = tensors["weight_scale"]
++    param = get_live_param(layer, f"{sublayer_name}_weight_scale")
++    if not isinstance(param, torch.nn.Parameter):
++        raise TypeError("Expected a live Humming weight-scale Parameter")
++    if not packed.is_contiguous():
++        raise ValueError("Packed Humming scales must be contiguous")
++    nbytes = packed.numel() * packed.element_size()
++    before = param.untyped_storage().nbytes()
++    if packed.storage_offset() or packed.untyped_storage().nbytes() != nbytes:
++        packed = packed.clone()
++    param.data = packed.detach()
++    logger.info_once(
++        "PCAI packed Humming scale storage: %d -> %d bytes",
++        before,
++        param.untyped_storage().nbytes(),
++    )
+ 
+ 
+ def _process_single_sublayer(
