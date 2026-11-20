@@ -329,6 +329,18 @@ RUN set -eux; \
     find "$HUMMING_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true; \
     rm -f /tmp/humming.patch
 
+# v0.34 preserves checkpoint-sized storage in replace_parameter, so nibble
+# packing alone no longer refunds VRAM. Rebind only packed MoE scale storage,
+# retaining Parameter identity/loader aliases; refuse unsupported direct reload.
+COPY patches/humming-packed-bs-storage-v034.patch /tmp/humming-storage.patch
+COPY tools/check_humming_packed_storage.py /tmp/check_humming_packed_storage.py
+RUN set -eux; \
+    test "$(sha256sum /tmp/humming-storage.patch | cut -d' ' -f1)" = "38206ccd55f93a0079bad588e67bc96c08bb9ed6f91e86566811f0ac3ae169f3"; \
+    SITE="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
+    patch --batch --forward --fuzz=0 -p1 -d "$SITE" < /tmp/humming-storage.patch; \
+    python3 /tmp/check_humming_packed_storage.py; \
+    rm -f /tmp/humming-storage.patch /tmp/check_humming_packed_storage.py
+
 # Packed scales also require native launcher metadata and half-width validation.
 COPY patches/humming-packed-bs-launcher.patch /tmp/humming-launcher.patch
 COPY tools/build_humming_launcher.py /tmp/build_humming_launcher.py
